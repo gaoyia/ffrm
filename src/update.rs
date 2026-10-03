@@ -10,11 +10,12 @@ use windows_sys::Win32::Networking::WinHttp::{
     WinHttpSetOption, WinHttpSetTimeouts, INTERNET_DEFAULT_HTTPS_PORT,
     WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
     WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2, WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3,
-    WINHTTP_OPTION_SECURE_PROTOCOLS, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+    WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
+    WINHTTP_OPTION_SECURE_PROTOCOLS, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LOCATION,
+    WINHTTP_QUERY_STATUS_CODE,
 };
 
-const LATEST_RELEASE: &str = "/repos/gaoyia/ffrm/releases/latest";
-const JSON_LIMIT: usize = 1_048_576;
+const RELEASES_LATEST: &str = "/gaoyia/ffrm/releases/latest";
 const EXE_LIMIT: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -25,6 +26,7 @@ pub enum Status {
     Failed,
 }
 
+#[derive(Debug)]
 enum FetchError {
     Missing,
     Network,
@@ -53,8 +55,8 @@ pub fn check(current: &str) -> Status {
 pub fn install() -> Result<(), ()> {
     let current = std::env::current_exe().map_err(|_| ())?;
     let (retired, incoming) = stage_paths(&current).ok_or(())?;
-    let body = fetch_latest().map_err(|_| ())?;
-    let url = exe_url(&body).ok_or(())?;
+    let tag = fetch_tag().map_err(|_| ())?;
+    let url = release_exe(&tag);
     if download(&url, &incoming).is_err() {
         let _ = fs::remove_file(&incoming);
         return Err(());
@@ -92,26 +94,62 @@ fn compare(current: &str, tag: &str) -> Status {
 }
 
 fn fetch_tag() -> Result<String, FetchError> {
-    let body = fetch_latest()?;
-    tag_name(&body)
-        .map(str::to_string)
-        .ok_or(FetchError::Network)
+    release_tag(&latest_location()?)
 }
 
-fn fetch_latest() -> Result<String, FetchError> {
-    let bytes = http_get(
-        "api.github.com",
-        LATEST_RELEASE,
-        "application/vnd.github+json",
-        JSON_LIMIT,
-        true,
-    )?;
-    String::from_utf8(bytes).map_err(|_| FetchError::Network)
+fn release_exe(tag: &str) -> String {
+    format!("https://github.com/gaoyia/ffrm/releases/download/{tag}/ffrm.exe")
+}
+
+fn release_tag(location: &str) -> Result<String, FetchError> {
+    let marker = "/releases/tag/";
+    let Some(at) = location.find(marker) else {
+        return Err(FetchError::Network);
+    };
+    let tag = location[at + marker.len()..]
+        .split(['?', '#', '/'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if tag.is_empty() {
+        Err(FetchError::Network)
+    } else {
+        Ok(tag.to_string())
+    }
+}
+
+fn latest_location() -> Result<String, FetchError> {
+    let exchange = open_request("github.com", RELEASES_LATEST, "*/*", false)?;
+    unsafe {
+        if WinHttpSendRequest(
+            exchange.request.0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        ) == 0
+        {
+            return Err(FetchError::Network);
+        }
+        if WinHttpReceiveResponse(exchange.request.0, std::ptr::null_mut()) == 0 {
+            return Err(FetchError::Network);
+        }
+        let status = status_code(exchange.request.0)?;
+        if status == 404 {
+            return Err(FetchError::Missing);
+        }
+        if !(300..400).contains(&status) {
+            return Err(FetchError::Network);
+        }
+        query_header(exchange.request.0, WINHTTP_QUERY_LOCATION)
+    }
 }
 
 fn download(url: &str, dest: &Path) -> Result<(), FetchError> {
     let (host, path) = split_https(url).ok_or(FetchError::Network)?;
-    let bytes = http_get(&host, &path, "application/octet-stream", EXE_LIMIT, false)?;
+    let bytes = http_get(&host, &path, "application/octet-stream", EXE_LIMIT)?;
     if bytes.len() < 64 || bytes.first_chunk::<2>() != Some(b"MZ") {
         return Err(FetchError::Network);
     }
@@ -123,13 +161,13 @@ fn download(url: &str, dest: &Path) -> Result<(), FetchError> {
     Ok(())
 }
 
-fn http_get(
-    host: &str,
-    path: &str,
-    accept: &str,
-    max: usize,
-    missing_is_distinct: bool,
-) -> Result<Vec<u8>, FetchError> {
+struct Exchange {
+    _session: Session,
+    _connection: Session,
+    request: Session,
+}
+
+fn open_request(host: &str, path: &str, accept: &str, follow: bool) -> Result<Exchange, FetchError> {
     unsafe {
         let agent = wide("ffrm");
         let session = WinHttpOpen(
@@ -178,6 +216,18 @@ fn http_get(
             return Err(FetchError::Network);
         }
         let request = Session(request);
+        if !follow {
+            let never = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+            if WinHttpSetOption(
+                request.0 as *const c_void,
+                WINHTTP_OPTION_REDIRECT_POLICY,
+                &never as *const u32 as *const c_void,
+                std::mem::size_of_val(&never) as u32,
+            ) == 0
+            {
+                return Err(FetchError::Network);
+            }
+        }
         let headers = wide(&format!("User-Agent: ffrm\r\nAccept: {accept}\r\n"));
         if WinHttpAddRequestHeaders(
             request.0,
@@ -188,21 +238,74 @@ fn http_get(
         {
             return Err(FetchError::Network);
         }
-        if WinHttpSendRequest(request.0, std::ptr::null(), 0, std::ptr::null(), 0, 0, 0) == 0 {
+        Ok(Exchange {
+            _session: session,
+            _connection: connection,
+            request,
+        })
+    }
+}
+
+fn http_get(host: &str, path: &str, accept: &str, max: usize) -> Result<Vec<u8>, FetchError> {
+    let exchange = open_request(host, path, accept, true)?;
+    unsafe {
+        if WinHttpSendRequest(
+            exchange.request.0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        ) == 0
+        {
             return Err(FetchError::Network);
         }
-        if WinHttpReceiveResponse(request.0, std::ptr::null_mut()) == 0 {
+        if WinHttpReceiveResponse(exchange.request.0, std::ptr::null_mut()) == 0 {
             return Err(FetchError::Network);
         }
-        let status = status_code(request.0)?;
-        if missing_is_distinct && status == 404 {
-            return Err(FetchError::Missing);
-        }
+        let status = status_code(exchange.request.0)?;
         if status != 200 {
             return Err(FetchError::Network);
         }
-        read_body(request.0, max)
+        read_body(exchange.request.0, max)
     }
+}
+
+fn query_header(request: *mut c_void, level: u32) -> Result<String, FetchError> {
+    let mut bytes = 0u32;
+    unsafe {
+        WinHttpQueryHeaders(
+            request,
+            level,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            &mut bytes,
+            std::ptr::null_mut(),
+        );
+    }
+    if bytes < 2 {
+        return Err(FetchError::Network);
+    }
+    let mut units = vec![0u16; bytes as usize / 2];
+    let ok = unsafe {
+        WinHttpQueryHeaders(
+            request,
+            level,
+            std::ptr::null(),
+            units.as_mut_ptr() as *mut c_void,
+            &mut bytes,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(FetchError::Network);
+    }
+    let end = units
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(units.len());
+    Ok(String::from_utf16_lossy(&units[..end]))
 }
 
 fn status_code(request: *mut c_void) -> Result<u32, FetchError> {
@@ -292,27 +395,6 @@ fn split_https(url: &str) -> Option<(String, String)> {
     Some((host.to_string(), rest[slash..].to_string()))
 }
 
-fn exe_url(body: &str) -> Option<&str> {
-    let at = body
-        .find("\"name\": \"ffrm.exe\"")
-        .or_else(|| body.find("\"name\":\"ffrm.exe\""))?;
-    let window = body.get(at..body.len().min(at + 800))?;
-    json_string(window, "browser_download_url")
-}
-
-fn tag_name(body: &str) -> Option<&str> {
-    json_string(body, "tag_name")
-}
-
-fn json_string<'a>(body: &'a str, key: &str) -> Option<&'a str> {
-    let pattern = format!("\"{key}\"");
-    let rest = body.get(body.find(&pattern)? + pattern.len()..)?;
-    let rest = rest.trim_start().strip_prefix(':')?.trim_start();
-    let rest = rest.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some(&rest[..end])
-}
-
 fn display_version(tag: &str) -> String {
     tag.trim().trim_start_matches(['v', 'V']).to_string()
 }
@@ -359,17 +441,12 @@ mod tests {
     }
 
     #[test]
-    fn tag_name_is_the_first_json_string() {
-        let body = r#"{"html_url":"https://github.com/gaoyia/ffrm/releases/tag/v0.2.0","tag_name":"v0.2.0","body":"\"tag_name\": \"v9.9.9\""}"#;
-        assert_eq!(tag_name(body), Some("v0.2.0"));
-    }
-
-    #[test]
-    fn download_url_is_the_exe_asset() {
-        let body = r#"{"assets":[{"name":"LICENSE","browser_download_url":"https://github.com/gaoyia/ffrm/releases/download/v0.2.0/LICENSE"},{"name":"ffrm.exe","browser_download_url":"https://github.com/gaoyia/ffrm/releases/download/v0.2.0/ffrm.exe"}]}"#;
+    fn release_location_gives_the_tag_and_download() {
+        let location = "https://github.com/gaoyia/ffrm/releases/tag/v0.2.0";
+        assert_eq!(release_tag(location).unwrap(), "v0.2.0");
         assert_eq!(
-            exe_url(body),
-            Some("https://github.com/gaoyia/ffrm/releases/download/v0.2.0/ffrm.exe")
+            release_exe("v0.2.0"),
+            "https://github.com/gaoyia/ffrm/releases/download/v0.2.0/ffrm.exe"
         );
     }
 

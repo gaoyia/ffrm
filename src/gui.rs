@@ -3,8 +3,10 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     canvas, div, ease_in_out, fill, point, prelude::*, px, rgb, size, Animation, AnimationExt, App,
-    Application, Bounds, Context, ExternalPaths, FontWeight, IntoElement, ScrollHandle,
-    TitlebarOptions, Window, WindowBounds, WindowControlArea, WindowOptions,
+    Application, Bounds, ClipboardItem, Context, ExternalPaths, FocusHandle, FontWeight,
+    HighlightStyle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ScrollHandle, StyledText, TextLayout, TitlebarOptions, Window, WindowBounds,
+    WindowControlArea, WindowOptions,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -120,10 +122,18 @@ pub struct Desktop {
     win11: bool,
     update_epoch: u64,
     update: UpdateState,
+    config_focus: FocusHandle,
+    config_anchor: Option<usize>,
+    config_head: Option<usize>,
+    config_dragging: bool,
 }
 
 impl Desktop {
-    fn from_config(config: Config, config_error: Option<String>) -> Self {
+    fn from_config(
+        config: Config,
+        config_error: Option<String>,
+        config_focus: FocusHandle,
+    ) -> Self {
         Self {
             items: Vec::new(),
             busy: false,
@@ -144,7 +154,29 @@ impl Desktop {
             win11: menu::windows_11(),
             update_epoch: 0,
             update: UpdateState::Checking,
+            config_focus,
+            config_anchor: None,
+            config_head: None,
+            config_dragging: false,
         }
+    }
+
+    fn copy_config_path(&mut self, cx: &mut Context<Self>) {
+        let path = config::config_path().display().to_string();
+        let selected = self
+            .config_anchor
+            .zip(self.config_head)
+            .and_then(|(anchor, head)| {
+                if anchor == head {
+                    return None;
+                }
+                let start = char_index(&path, anchor.min(head));
+                let end = char_index(&path, anchor.max(head));
+                path.get(start..end)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_string)
+            });
+        cx.write_to_clipboard(ClipboardItem::new_string(selected.unwrap_or(path)));
     }
 
     fn choose_language(&mut self, lang: Lang, window: &mut Window, cx: &mut Context<Self>) {
@@ -1402,24 +1434,34 @@ fn settings_page(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoEleme
         .id("settings-page")
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
         .flex()
         .flex_col()
-        .px_8()
-        .pb_6()
-        .gap_4()
+        .overflow_hidden()
         .child(settings_heading(desktop.lang, cx))
-        .child(version_card(desktop, cx))
-        .child(default_settings(desktop, cx))
-        .child(context_menu_section(desktop, cx))
-        .child(config_path_line(desktop))
+        .child(
+            div()
+                .id("settings-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .px_8()
+                .pt_4()
+                .pb_6()
+                .gap_4()
+                .child(version_card(desktop, cx))
+                .child(default_settings(desktop, cx))
+                .child(context_menu_section(desktop, cx)),
+        )
 }
 
 fn settings_heading(lang: Lang, cx: &mut Context<Desktop>) -> impl IntoElement {
     div()
+        .flex_shrink_0()
+        .px_8()
         .flex()
         .items_center()
-        .gap_3()
         .child(action_button(
             "settings-back",
             text(lang, "返回", "Back"),
@@ -1430,12 +1472,6 @@ fn settings_heading(lang: Lang, cx: &mut Context<Desktop>) -> impl IntoElement {
                 cx.notify();
             }),
         ))
-        .child(
-            div()
-                .text_sm()
-                .text_color(rgb(STONE))
-                .child(text(lang, "设置", "Settings")),
-        )
 }
 
 fn version_card(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
@@ -1470,7 +1506,14 @@ fn version_card(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElemen
                         .font_weight(FontWeight::MEDIUM)
                         .child(env!("CARGO_PKG_VERSION")),
                 )
-                .child(version_status(desktop, cx)),
+                .child(version_status(desktop, cx))
+                .child(action_button(
+                    "check-update",
+                    text(lang, "检查新版", "Check again"),
+                    false,
+                    !matches!(desktop.update, UpdateState::Installing),
+                    cx.listener(|this, _event, _window, cx| this.check_update(cx)),
+                )),
         )
 }
 
@@ -1526,11 +1569,7 @@ fn default_settings(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoEl
                 .text_color(rgb(STONE))
                 .child(text(lang, "默认", "Defaults")),
         )
-        .child(div().text_xs().text_color(rgb(STONE)).child(text(
-            lang,
-            "写入程序旁边的 ffrm.cfg，下次打开仍然有效。",
-            "Saved in ffrm.cfg next to the program, and used next time.",
-        )))
+        .child(config_path_text(desktop, cx))
         .child(
             div()
                 .flex()
@@ -1568,11 +1607,6 @@ fn context_menu_section(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl In
         .flex_col()
         .gap_3()
         .child(div().text_sm().child(menu_status(desktop.menu_state, lang)))
-        .child(div().text_xs().text_color(rgb(STONE)).child(text(
-            lang,
-            "右键文件或文件夹会打开窗口并加入队列，不会直接删除。",
-            "Right-click a file or folder to queue it here. Nothing is deleted yet.",
-        )))
         .child(
             div()
                 .flex()
@@ -1632,15 +1666,98 @@ fn menu_status(state: MenuState, lang: Lang) -> &'static str {
     }
 }
 
-fn config_path_line(desktop: &Desktop) -> impl IntoElement {
-    let mut block = div().flex().flex_col().gap_1().child(
-        div()
-            .w_full()
-            .text_xs()
-            .text_color(rgb(STONE))
-            .truncate()
-            .child(config::config_path().display().to_string()),
-    );
+fn config_path_text(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
+    let path = config::config_path().display().to_string();
+    let mut styled = StyledText::new(path.clone());
+    if let Some(range) = selection_range(&path, desktop.config_anchor, desktop.config_head) {
+        styled = styled.with_highlights([(
+            range,
+            HighlightStyle {
+                color: Some(rgb(CREAM).into()),
+                background_color: Some(rgb(0x6b5340).into()),
+                ..Default::default()
+            },
+        )]);
+    }
+    let layout = styled.layout().clone();
+    let move_layout = layout.clone();
+    let mut block = div()
+        .id("config-path")
+        .w_full()
+        .min_w_0()
+        .text_xs()
+        .text_color(rgb(STONE))
+        .line_height(px(18.))
+        .cursor_text()
+        .track_focus(&desktop.config_focus)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                this.config_focus.focus(window);
+                let path = config::config_path().display().to_string();
+                if event.click_count >= 2 {
+                    this.config_anchor = Some(0);
+                    this.config_head = Some(path.len());
+                } else {
+                    let ix = char_index(&path, path_hit(&layout, event.position, path.len()));
+                    this.config_anchor = Some(ix);
+                    this.config_head = Some(ix);
+                }
+                this.config_dragging = true;
+                cx.notify();
+            }),
+        )
+        .on_mouse_move(
+            cx.listener(move |this, event: &MouseMoveEvent, _window, cx| {
+                if !this.config_dragging {
+                    return;
+                }
+                let path = config::config_path().display().to_string();
+                let ix = char_index(&path, path_hit(&move_layout, event.position, path.len()));
+                if this.config_head != Some(ix) {
+                    this.config_head = Some(ix);
+                    cx.notify();
+                }
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, _cx| {
+                this.config_dragging = false;
+            }),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, _cx| {
+                this.config_dragging = false;
+            }),
+        )
+        .on_mouse_down_out(cx.listener(|this, _event, _window, cx| {
+            if this.config_anchor.take().is_some() | this.config_head.take().is_some() {
+                this.config_dragging = false;
+                cx.notify();
+            }
+        }))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            if !event.keystroke.modifiers.secondary() {
+                return;
+            }
+            match event.keystroke.key.to_ascii_lowercase().as_str() {
+                "a" => {
+                    let len = config::config_path().display().to_string().len();
+                    this.config_anchor = Some(0);
+                    this.config_head = Some(len);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+                "c" => {
+                    this.copy_config_path(cx);
+                    cx.stop_propagation();
+                }
+                _ => {}
+            }
+        }))
+        .child(styled);
     if let Some(error) = &desktop.config_error {
         block = block.child(
             div()
@@ -1650,6 +1767,37 @@ fn config_path_line(desktop: &Desktop) -> impl IntoElement {
         );
     }
     block
+}
+
+fn selection_range(
+    path: &str,
+    anchor: Option<usize>,
+    head: Option<usize>,
+) -> Option<std::ops::Range<usize>> {
+    let (anchor, head) = anchor.zip(head)?;
+    if anchor == head {
+        return None;
+    }
+    let start = char_index(path, anchor.min(head));
+    let end = char_index(path, anchor.max(head));
+    (start < end).then_some(start..end)
+}
+
+fn path_hit(layout: &TextLayout, position: gpui::Point<gpui::Pixels>, len: usize) -> usize {
+    let ix = match layout.index_for_position(position) {
+        Ok(ix) | Err(ix) => ix,
+    };
+    ix.min(len)
+}
+
+fn char_index(text: &str, mut ix: usize) -> usize {
+    if ix >= text.len() {
+        return text.len();
+    }
+    while ix > 0 && !text.is_char_boundary(ix) {
+        ix -= 1;
+    }
+    ix
 }
 
 pub fn run(initial: Vec<PathBuf>) {
@@ -1678,7 +1826,11 @@ pub fn run(initial: Vec<PathBuf>) {
                     }
                 });
                 cx.new(move |cx| {
-                    let mut desktop = Desktop::from_config(config, config_error);
+                    let mut desktop = Desktop::from_config(
+                        config,
+                        config_error,
+                        cx.focus_handle().tab_stop(true),
+                    );
                     if !initial.is_empty() {
                         desktop.add_paths(&initial, cx);
                     }
