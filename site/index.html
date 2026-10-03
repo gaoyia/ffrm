@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ffrm · 文件强制解锁删除工具</title>
+    <meta
+      name="description"
+      content="查看谁占用了本地文件或文件夹，解除占用，然后删除。仅支持 Windows。"
+    />
+    <link rel="icon" href="icon.png" />
+    <style>
+      :root {
+        --canvas: #12110f;
+        --ink: #1c1a17;
+        --cream: #f4efe6;
+        --stone: #a89b8c;
+        --brass: #c6a57a;
+        --line: #3c362e;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; }
+      body {
+        background: var(--canvas);
+        color: var(--cream);
+        font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+        color-scheme: dark;
+      }
+      a { color: inherit; }
+      .page {
+        width: min(640px, calc(100% - 48px));
+        margin: 0 auto;
+        padding: 28px 0 64px;
+      }
+      .lang {
+        display: flex;
+        justify-content: flex-end;
+      }
+      .switch {
+        display: flex;
+        padding: 2px;
+        border-radius: 999px;
+        background: var(--ink);
+      }
+      .switch button {
+        width: 48px;
+        height: 24px;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--stone);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .switch button[aria-pressed="true"] {
+        background: var(--cream);
+        color: var(--canvas);
+      }
+      .hero {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+        margin-top: 48px;
+      }
+      .hero img {
+        width: 96px;
+        height: 96px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        font-weight: 560;
+        letter-spacing: 0;
+      }
+      .lead {
+        margin: 0;
+        max-width: 36em;
+        color: var(--stone);
+        font-size: 16px;
+        line-height: 1.6;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 8px;
+      }
+      .download, .repo {
+        display: inline-flex;
+        align-items: center;
+        height: 44px;
+        padding: 0 18px;
+        border-radius: 999px;
+        font-size: 14px;
+        text-decoration: none;
+      }
+      .download {
+        background: var(--cream);
+        color: var(--canvas);
+      }
+      .download[aria-disabled="true"] {
+        background: var(--ink);
+        color: var(--stone);
+        pointer-events: none;
+      }
+      .repo {
+        border: 1px solid var(--line);
+        color: var(--cream);
+      }
+      .download:hover { background: #fffaf3; }
+      .repo:hover { border-color: var(--brass); }
+      .meta {
+        min-height: 20px;
+        margin: 0;
+        color: var(--stone);
+        font-size: 13px;
+        line-height: 20px;
+      }
+      .notes {
+        width: 100%;
+        margin: 28px 0 0;
+        padding: 4px 20px;
+        border-radius: 24px;
+        background: var(--ink);
+        list-style: none;
+      }
+      .notes li {
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .notes li:last-child { border-bottom: 0; }
+      footer {
+        margin-top: 28px;
+        color: var(--stone);
+        font-size: 13px;
+      }
+      footer a { color: var(--brass); }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <div class="lang">
+        <div class="switch" role="group" aria-label="Language">
+          <button type="button" id="lang-zh" aria-pressed="true">中文</button>
+          <button type="button" id="lang-en" aria-pressed="false">EN</button>
+        </div>
+      </div>
+      <section class="hero">
+        <img src="icon.png" width="96" height="96" alt="" />
+        <h1 id="title">文件强制解锁删除工具</h1>
+        <p class="lead" id="lead">查看谁占用了本地文件或文件夹，解除占用，然后删除。</p>
+        <div class="actions">
+          <a class="download" id="download" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">正在查找安装包</a>
+          <a class="repo" id="repo" href="https://github.com/gaoyia/ffrm">GitHub</a>
+        </div>
+        <p class="meta" id="meta"></p>
+        <ul class="notes" id="notes"></ul>
+      </section>
+      <footer>
+        <a id="license" href="https://github.com/gaoyia/ffrm/blob/main/LICENSE">MIT</a>
+      </footer>
+    </main>
+    <script>
+      const copy = {
+        zh: {
+          html: "zh-CN",
+          title: "文件强制解锁删除工具",
+          document: "ffrm · 文件强制解锁删除工具",
+          lead: "查看谁占用了本地文件或文件夹，解除占用，然后删除。",
+          finding: "正在查找安装包",
+          download: "下载 Windows 版",
+          missing: "还没有可下载的安装包",
+          repo: "GitHub",
+          notes: [
+            "程序文件很小，下载后可以直接运行。",
+            "支持加到右键菜单，用来删除文件或文件夹。",
+            "目前仅支持 Windows。"
+          ],
+          latest: "最新版本",
+          windows: "Windows x64"
+        },
+        en: {
+          html: "en",
+          title: "Force Unlock and Delete",
+          document: "ffrm · Force Unlock and Delete",
+          lead: "See which program is using a file or folder, unlock it, then delete it.",
+          finding: "Looking for a download",
+          download: "Download for Windows",
+          missing: "No download has been published",
+          repo: "GitHub",
+          notes: [
+            "The program is a small file, and you can run it right after downloading.",
+            "It can be added to the right-click menu to delete files or folders.",
+            "It currently only supports Windows."
+          ],
+          latest: "Latest",
+          windows: "Windows x64"
+        }
+      };
+
+      const repo = "https://github.com/gaoyia/ffrm";
+      const releases = repo + "/releases/latest";
+      let lang = "zh";
+      let release = null;
+      let loaded = false;
+
+      const title = document.getElementById("title");
+      const lead = document.getElementById("lead");
+      const download = document.getElementById("download");
+      const meta = document.getElementById("meta");
+      const notes = document.getElementById("notes");
+      const zh = document.getElementById("lang-zh");
+      const en = document.getElementById("lang-en");
+
+      function text() {
+        return copy[lang];
+      }
+
+      function asset() {
+        if (!release || !release.assets) return null;
+        return release.assets.find((item) => item.name === "ffrm.exe")
+          || release.assets.find((item) => item.name.toLowerCase().endsWith(".exe"));
+      }
+
+      function sizeLabel(bytes) {
+        if (!bytes) return "";
+        const mb = bytes / (1024 * 1024);
+        return mb >= 1 ? mb.toFixed(1) + " MB" : Math.max(1, Math.round(bytes / 1024)) + " KB";
+      }
+
+      function render() {
+        const t = text();
+        document.documentElement.lang = t.html;
+        document.title = t.document;
+        title.textContent = t.title;
+        lead.textContent = t.lead;
+        zh.setAttribute("aria-pressed", lang === "zh" ? "true" : "false");
+        en.setAttribute("aria-pressed", lang === "en" ? "true" : "false");
+        notes.replaceChildren();
+        for (const line of t.notes) {
+          const item = document.createElement("li");
+          item.textContent = line;
+          notes.append(item);
+        }
+        const file = asset();
+        if (!loaded) {
+          download.textContent = t.finding;
+          download.href = releases;
+          download.setAttribute("aria-disabled", "true");
+          meta.textContent = "";
+          return;
+        }
+        if (!file) {
+          download.textContent = t.missing;
+          download.href = releases;
+          download.removeAttribute("aria-disabled");
+          meta.textContent = "";
+          return;
+        }
+        download.textContent = t.download;
+        download.href = file.browser_download_url;
+        download.removeAttribute("aria-disabled");
+        const version = (release.tag_name || "").replace(/^v/, "");
+        const size = sizeLabel(file.size);
+        meta.textContent = [t.latest + " " + version, t.windows, size].filter(Boolean).join(" · ");
+      }
+
+      zh.addEventListener("click", () => { lang = "zh"; render(); });
+      en.addEventListener("click", () => { lang = "en"; render(); });
+      render();
+
+      fetch("https://api.github.com/repos/gaoyia/ffrm/releases/latest", {
+        headers: { Accept: "application/vnd.github+json" }
+      })
+        .then((response) => response.ok ? response.json() : null)
+        .then((data) => { release = data; loaded = true; render(); })
+        .catch(() => { release = null; loaded = true; render(); });
+    </script>
+  </body>
+</html>
