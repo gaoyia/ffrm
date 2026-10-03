@@ -118,6 +118,17 @@
         font-size: 13px;
         line-height: 20px;
       }
+      .install {
+        margin: 4px 0 0;
+        color: var(--stone);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .install code {
+        color: var(--cream);
+        font-family: Consolas, "Cascadia Mono", monospace;
+        font-size: 13px;
+      }
       .notes {
         width: 100%;
         margin: 28px 0 0;
@@ -158,6 +169,7 @@
           <a class="repo" id="repo" href="https://github.com/gaoyia/ffrm">GitHub</a>
         </div>
         <p class="meta" id="meta"></p>
+        <p class="install" id="install"></p>
         <ul class="notes" id="notes"></ul>
       </section>
       <footer>
@@ -174,6 +186,8 @@
           finding: "正在查找安装包",
           download: "下载 Windows 版",
           missing: "还没有可下载的安装包",
+          install: "已经安装 Rust 时，可以执行 ",
+          installEnd: "。",
           repo: "GitHub",
           notes: [
             "程序文件很小，下载后可以直接运行。",
@@ -191,6 +205,8 @@
           finding: "Looking for a download",
           download: "Download for Windows",
           missing: "No download has been published",
+          install: "If Rust is already installed, run ",
+          installEnd: ".",
           repo: "GitHub",
           notes: [
             "The program is a small file, and you can run it right after downloading.",
@@ -212,6 +228,7 @@
       const lead = document.getElementById("lead");
       const download = document.getElementById("download");
       const meta = document.getElementById("meta");
+      const install = document.getElementById("install");
       const notes = document.getElementById("notes");
       const zh = document.getElementById("lang-zh");
       const en = document.getElementById("lang-en");
@@ -240,6 +257,12 @@
         lead.textContent = t.lead;
         zh.setAttribute("aria-pressed", lang === "zh" ? "true" : "false");
         en.setAttribute("aria-pressed", lang === "en" ? "true" : "false");
+        install.replaceChildren();
+        install.append(document.createTextNode(t.install));
+        const command = document.createElement("code");
+        command.textContent = "cargo install ffrm";
+        install.append(command);
+        install.append(document.createTextNode(t.installEnd));
         notes.replaceChildren();
         for (const line of t.notes) {
           const item = document.createElement("li");

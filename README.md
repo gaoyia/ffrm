@@ -8,6 +8,14 @@ Windows 工具。查看谁占用了本地文件或文件夹，解除占用，然
 
 安装包发布在 [GitHub Releases](https://github.com/gaoyia/ffrm/releases)。下载页是 [gaoyia.github.io/ffrm](https://gaoyia.github.io/ffrm/)。
 
+已经安装 Rust 时，可以执行：
+
+```text
+cargo install ffrm
+```
+
+装好后在命令行运行 `ffrm`。
+
 ## 构建
 
 需要 Rust 1.79 或更新版本。
