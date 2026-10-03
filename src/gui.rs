@@ -12,6 +12,7 @@ use ffrm::Inspection;
 
 use crate::config::{self, Config, Lang};
 use crate::menu::{self, MenuState};
+use crate::update::{self, Status};
 
 const CANVAS: u32 = 0x12110f;
 const INK: u32 = 0x1c1a17;
@@ -42,6 +43,27 @@ fn menu_label(lang: Lang) -> &'static str {
 enum Page {
     Queue,
     Settings,
+}
+
+enum UpdateState {
+    Checking,
+    Current,
+    Available(String),
+    Installing,
+    Missing,
+    Failed,
+    UpdateFailed,
+}
+
+impl From<Status> for UpdateState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Current => UpdateState::Current,
+            Status::Available(version) => UpdateState::Available(version),
+            Status::Missing => UpdateState::Missing,
+            Status::Failed => UpdateState::Failed,
+        }
+    }
 }
 
 struct Note {
@@ -96,6 +118,8 @@ pub struct Desktop {
     menu_state: MenuState,
     menu_note: Option<Note>,
     win11: bool,
+    update_epoch: u64,
+    update: UpdateState,
 }
 
 impl Desktop {
@@ -118,6 +142,8 @@ impl Desktop {
             menu_state: MenuState::Absent,
             menu_note: None,
             win11: menu::windows_11(),
+            update_epoch: 0,
+            update: UpdateState::Checking,
         }
     }
 
@@ -190,8 +216,52 @@ impl Desktop {
             self.page = Page::Settings;
             self.menu_state = menu::state();
             self.menu_note = None;
+            self.check_update(cx);
         }
         cx.notify();
+    }
+
+    fn check_update(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.update, UpdateState::Installing) {
+            return;
+        }
+        self.update_epoch = self.update_epoch.wrapping_add(1);
+        let epoch = self.update_epoch;
+        self.update = UpdateState::Checking;
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_spawn(async { update::check(env!("CARGO_PKG_VERSION")) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.update_epoch == epoch && !matches!(this.update, UpdateState::Installing) {
+                    this.update = UpdateState::from(status);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.update, UpdateState::Available(_)) {
+            return;
+        }
+        self.update = UpdateState::Installing;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async { update::install() }).await;
+            this.update(cx, |this, cx| {
+                if result.is_ok() {
+                    cx.quit();
+                } else if matches!(this.update, UpdateState::Installing) {
+                    this.update = UpdateState::UpdateFailed;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn install_menu(&mut self, cx: &mut Context<Self>) {
@@ -1339,7 +1409,7 @@ fn settings_page(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoEleme
         .pb_6()
         .gap_4()
         .child(settings_heading(desktop.lang, cx))
-        .child(version_card(desktop.lang))
+        .child(version_card(desktop, cx))
         .child(default_settings(desktop, cx))
         .child(context_menu_section(desktop, cx))
         .child(config_path_line(desktop))
@@ -1368,7 +1438,8 @@ fn settings_heading(lang: Lang, cx: &mut Context<Desktop>) -> impl IntoElement {
         )
 }
 
-fn version_card(lang: Lang) -> impl IntoElement {
+fn version_card(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
+    let lang = desktop.lang;
     div()
         .h(px(48.))
         .flex_shrink_0()
@@ -1389,11 +1460,58 @@ fn version_card(lang: Lang) -> impl IntoElement {
         )
         .child(
             div()
-                .text_sm()
-                .line_height(px(20.))
-                .font_weight(FontWeight::MEDIUM)
-                .child(env!("CARGO_PKG_VERSION")),
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .text_sm()
+                        .line_height(px(20.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(env!("CARGO_PKG_VERSION")),
+                )
+                .child(version_status(desktop, cx)),
         )
+}
+
+fn version_status(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
+    let lang = desktop.lang;
+    let open = matches!(desktop.update, UpdateState::Available(_));
+    let (caption, color) = match &desktop.update {
+        UpdateState::Checking => (text(lang, "正在检查", "Checking").to_string(), STONE),
+        UpdateState::Current => (text(lang, "已是最新", "Up to date").to_string(), STONE),
+        UpdateState::Available(version) => {
+            let caption = match lang {
+                Lang::Zh => format!("可更新到 {version}"),
+                Lang::En => format!("Update to {version}"),
+            };
+            (caption, BRASS)
+        }
+        UpdateState::Installing => (text(lang, "正在更新", "Updating").to_string(), STONE),
+        UpdateState::Missing => (
+            text(lang, "暂无发布版本", "No release yet").to_string(),
+            STONE,
+        ),
+        UpdateState::Failed => (text(lang, "检查失败", "Check failed").to_string(), 0xe7b2a6),
+        UpdateState::UpdateFailed => (
+            text(lang, "更新失败", "Update failed").to_string(),
+            0xe7b2a6,
+        ),
+    };
+    let mut status = div()
+        .id("update-status")
+        .text_sm()
+        .line_height(px(20.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(color));
+    if open {
+        status = status
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.install_update(cx);
+            }));
+    }
+    status.child(caption)
 }
 
 fn default_settings(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
@@ -1535,6 +1653,7 @@ fn config_path_line(desktop: &Desktop) -> impl IntoElement {
 }
 
 pub fn run(initial: Vec<PathBuf>) {
+    update::clear_retired();
     let (config, config_error) = Config::load();
     let lang = config.lang;
     Application::new().run(move |cx: &mut App| {

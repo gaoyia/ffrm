@@ -1,6 +1,7 @@
 mod config;
 mod gui;
 mod menu;
+mod update;
 
 use std::process::ExitCode;
 
