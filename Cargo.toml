@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "查看谁占用了本地文件，解除占用，并删除文件"
 license = "MIT"
+repository = "https://github.com/gaoyia/ffrm"
+homepage = "https://gaoyia.github.io/ffrm/"
+readme = "README.md"
 build = "build.rs"
+exclude = [".github/", "site/"]
 
 [profile.release]
 opt-level = "z"
