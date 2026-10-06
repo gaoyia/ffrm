@@ -121,6 +121,7 @@ pub struct Desktop {
     menu_note: Option<Note>,
     win11: bool,
     update_epoch: u64,
+    update_checked: bool,
     update: UpdateState,
     config_focus: FocusHandle,
     config_anchor: Option<usize>,
@@ -153,6 +154,7 @@ impl Desktop {
             menu_note: None,
             win11: menu::windows_11(),
             update_epoch: 0,
+            update_checked: false,
             update: UpdateState::Checking,
             config_focus,
             config_anchor: None,
@@ -248,7 +250,10 @@ impl Desktop {
             self.page = Page::Settings;
             self.menu_state = menu::state();
             self.menu_note = None;
-            self.check_update(cx);
+            if !self.update_checked {
+                self.update_checked = true;
+                self.check_update(cx);
+            }
         }
         cx.notify();
     }
