@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    canvas, div, ease_in_out, fill, point, prelude::*, px, rgb, size, Animation, AnimationExt, App,
-    Application, Bounds, ClipboardItem, Context, ExternalPaths, FocusHandle, FontWeight,
-    HighlightStyle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ScrollHandle, StyledText, TextLayout, TitlebarOptions, Window, WindowBounds,
-    WindowControlArea, WindowOptions,
+    canvas, div, ease_in_out, fill, point, prelude::*, px, rgb, size, svg, Animation, AnimationExt,
+    App, Application, AssetSource, Bounds, ClipboardItem, Context, ExternalPaths, FocusHandle,
+    FontWeight, HighlightStyle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ScrollHandle, SharedString, StyledText, TextLayout, TitlebarOptions, Window,
+    WindowBounds, WindowControlArea, WindowOptions,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -885,12 +885,12 @@ enum ChromeIcon {
     Close,
 }
 
-fn chrome_glyph(icon: ChromeIcon) -> &'static str {
+fn chrome_icon(icon: ChromeIcon) -> &'static str {
     match icon {
-        ChromeIcon::Minimize => "\u{E921}",
-        ChromeIcon::Maximize => "\u{E922}",
-        ChromeIcon::Restore => "\u{E923}",
-        ChromeIcon::Close => "\u{E8BB}",
+        ChromeIcon::Minimize => "chrome/minimize.svg",
+        ChromeIcon::Maximize => "chrome/maximize.svg",
+        ChromeIcon::Restore => "chrome/restore.svg",
+        ChromeIcon::Close => "chrome/close.svg",
     }
 }
 
@@ -900,37 +900,61 @@ fn chrome_button(
     close: bool,
     click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let pressed = if close { CREAM } else { BRASS };
     div()
         .id(id)
+        .group(id)
         .w(px(46.))
         .h_full()
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(STONE))
         .cursor_pointer()
         .hover(move |style| {
             if close {
-                style.bg(rgb(DELETE)).text_color(rgb(CREAM))
+                style.bg(rgb(DELETE))
             } else {
-                style.bg(rgb(INK)).text_color(rgb(CREAM))
+                style.bg(rgb(INK))
             }
         })
         .active(move |style| {
             if close {
-                style.bg(rgb(DELETE_PRESSED)).text_color(rgb(CREAM))
+                style.bg(rgb(DELETE_PRESSED))
             } else {
-                style.bg(rgb(0x2a261f)).text_color(rgb(BRASS))
+                style.bg(rgb(0x2a261f))
             }
         })
         .on_click(click)
         .child(
-            div()
-                .font_family("Segoe Fluent Icons")
-                .text_size(px(10.))
-                .line_height(px(10.))
-                .child(chrome_glyph(icon)),
+            svg()
+                .path(chrome_icon(icon))
+                .id(chrome_icon(icon))
+                .flex_shrink_0()
+                .w(px(12.))
+                .h(px(12.))
+                .text_color(rgb(STONE))
+                .group_hover(id, |style| style.text_color(rgb(CREAM)))
+                .group_active(id, move |style| style.text_color(rgb(pressed))),
         )
+}
+
+struct ChromeAssets;
+
+impl AssetSource for ChromeAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        let svg: &[u8] = match path {
+            "chrome/minimize.svg" => include_bytes!("../assets/chrome/minimize.svg"),
+            "chrome/maximize.svg" => include_bytes!("../assets/chrome/maximize.svg"),
+            "chrome/restore.svg" => include_bytes!("../assets/chrome/restore.svg"),
+            "chrome/close.svg" => include_bytes!("../assets/chrome/close.svg"),
+            _ => return Ok(None),
+        };
+        Ok(Some(std::borrow::Cow::Borrowed(svg)))
+    }
+
+    fn list(&self, _path: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(Vec::new())
+    }
 }
 
 fn queue_count(count: usize) -> impl IntoElement {
@@ -1809,7 +1833,7 @@ pub fn run(initial: Vec<PathBuf>) {
     update::clear_retired();
     let (config, config_error) = Config::load();
     let lang = config.lang;
-    Application::new().run(move |cx: &mut App| {
+    Application::new().with_assets(ChromeAssets).run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1120.), px(630.)), cx);
         cx.open_window(
             WindowOptions {
