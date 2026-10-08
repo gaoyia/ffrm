@@ -167,7 +167,12 @@ struct Exchange {
     request: Session,
 }
 
-fn open_request(host: &str, path: &str, accept: &str, follow: bool) -> Result<Exchange, FetchError> {
+fn open_request(
+    host: &str,
+    path: &str,
+    accept: &str,
+    follow: bool,
+) -> Result<Exchange, FetchError> {
     unsafe {
         let agent = wide("ffrm");
         let session = WinHttpOpen(

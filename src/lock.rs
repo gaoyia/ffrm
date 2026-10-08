@@ -12,7 +12,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::{
-    FormatMessageW, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
+    FormatMessageW, ReadProcessMemory, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
+};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::RestartManager::{
     RmEndSession, RmForceShutdown, RmGetList, RmRegisterResources, RmShutdown, RmStartSession,
@@ -20,7 +23,8 @@ use windows_sys::Win32::System::RestartManager::{
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
-    WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    WaitForSingleObject, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_TERMINATE, PROCESS_VM_READ,
 };
 
 const DELETE_ACCESS: u32 = 0x0001_0000;
@@ -44,8 +48,12 @@ pub struct Inspection {
 
 pub fn inspect(path: &Path) -> Result<Inspection, String> {
     let path = normalize_existing(path)?;
-    let (lockers, list_denied) = query_lockers(&path)?;
+    let (mut lockers, list_denied) = query_lockers(&path)?;
     let sharing_violation = is_sharing_violation(&path);
+    // Restart Manager misses a process that only has this directory as its current directory.
+    if sharing_violation && lockers.is_empty() {
+        lockers = current_directory_lockers(&path);
+    }
     Ok(Inspection {
         path,
         lockers,
@@ -406,6 +414,180 @@ fn process_image(pid: u32) -> Option<String> {
     Some(String::from_utf16_lossy(&buffer[..size as usize]))
 }
 
+#[repr(C)]
+struct ProcessBasicInformation {
+    _exit_status: isize,
+    peb_base_address: *mut std::ffi::c_void,
+    _affinity_mask: usize,
+    _base_priority: i32,
+    _pad: u32,
+    _unique_process_id: usize,
+    _inherited_from_unique_process_id: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct UnicodeString {
+    length: u16,
+    _maximum_length: u16,
+    _pad: u32,
+    buffer: *mut u16,
+}
+
+#[link(name = "ntdll")]
+extern "system" {
+    fn NtQueryInformationProcess(
+        process_handle: windows_sys::Win32::Foundation::HANDLE,
+        process_information_class: u32,
+        process_information: *mut std::ffi::c_void,
+        process_information_length: u32,
+        return_length: *mut u32,
+    ) -> i32;
+}
+
+fn current_directory_lockers(target: &Path) -> Vec<Locker> {
+    if cfg!(not(target_pointer_width = "64")) {
+        return Vec::new();
+    }
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot.is_null() || snapshot == INVALID_HANDLE_VALUE {
+        return Vec::new();
+    }
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut lockers = Vec::new();
+    let self_pid = unsafe { GetCurrentProcessId() };
+    if unsafe { Process32FirstW(snapshot, &mut entry) } != 0 {
+        loop {
+            let pid = entry.th32ProcessID;
+            if pid > 4 && pid != self_pid {
+                if let Some(cwd) = process_current_directory(pid) {
+                    if cwd_is_target(&cwd, target) {
+                        let app_name = wide_to_string(&entry.szExeFile);
+                        if !lockers.iter().any(|locker: &Locker| locker.pid == pid) {
+                            lockers.push(Locker {
+                                pid,
+                                app_name,
+                                image: process_image(pid),
+                                app_type: 0,
+                            });
+                        }
+                    }
+                }
+            }
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if unsafe { Process32NextW(snapshot, &mut entry) } == 0 {
+                break;
+            }
+        }
+    }
+    unsafe {
+        CloseHandle(snapshot);
+    }
+    lockers.sort_by_key(|locker| locker.pid);
+    lockers
+}
+
+fn process_current_directory(pid: u32) -> Option<String> {
+    let access = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
+    let handle = unsafe { OpenProcess(access, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let cwd = read_process_current_directory(handle);
+    unsafe {
+        CloseHandle(handle);
+    }
+    cwd
+}
+
+fn read_process_current_directory(
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> Option<String> {
+    let mut info = ProcessBasicInformation {
+        _exit_status: 0,
+        peb_base_address: std::ptr::null_mut(),
+        _affinity_mask: 0,
+        _base_priority: 0,
+        _pad: 0,
+        _unique_process_id: 0,
+        _inherited_from_unique_process_id: 0,
+    };
+    let status = unsafe {
+        NtQueryInformationProcess(
+            process,
+            0,
+            (&mut info as *mut ProcessBasicInformation).cast(),
+            std::mem::size_of::<ProcessBasicInformation>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if status < 0 || info.peb_base_address.is_null() {
+        return None;
+    }
+    // x64 PEB.ProcessParameters is at 0x20. CurrentDirectory is at 0x38 in that block.
+    let params: usize = read_remote(process, unsafe { info.peb_base_address.add(0x20) })?;
+    if params == 0 {
+        return None;
+    }
+    let directory: UnicodeString =
+        read_remote(process, (params + 0x38) as *const std::ffi::c_void)?;
+    let bytes = directory.length as usize;
+    if bytes == 0 || bytes > 32768 || bytes % 2 != 0 || directory.buffer.is_null() {
+        return None;
+    }
+    let mut units = vec![0u16; bytes / 2];
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            process,
+            directory.buffer.cast(),
+            units.as_mut_ptr().cast(),
+            bytes,
+            &mut read,
+        )
+    };
+    if ok == 0 || read != bytes {
+        return None;
+    }
+    let text = String::from_utf16_lossy(&units);
+    let text = text.trim_end_matches('\0').trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn read_remote<T>(
+    process: windows_sys::Win32::Foundation::HANDLE,
+    address: *const std::ffi::c_void,
+) -> Option<T> {
+    let mut value = std::mem::MaybeUninit::<T>::uninit();
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            process,
+            address,
+            value.as_mut_ptr().cast(),
+            std::mem::size_of::<T>(),
+            &mut read,
+        )
+    };
+    if ok == 0 || read != std::mem::size_of::<T>() {
+        return None;
+    }
+    Some(unsafe { value.assume_init() })
+}
+
+fn cwd_is_target(cwd: &str, target: &Path) -> bool {
+    let trimmed = cwd.trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() {
+        return false;
+    }
+    same_path(Path::new(trimmed), target)
+}
+
 fn is_sharing_violation(path: &Path) -> bool {
     let wide = wide_path(path);
     let handle = unsafe {
@@ -684,5 +866,42 @@ mod tests {
             app_type: 3,
         };
         assert!(is_critical(&lsass));
+    }
+
+    #[test]
+    fn matches_a_current_directory_with_a_trailing_separator() {
+        let dir = std::env::temp_dir().join("ffrm-cwd-match");
+        fs::create_dir_all(&dir).unwrap();
+        let text = dir.display().to_string();
+        assert!(cwd_is_target(&text, &dir));
+        assert!(cwd_is_target(&format!("{text}\\"), &dir));
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn lists_a_process_whose_current_directory_is_the_target() {
+        let dir = std::env::temp_dir().join(format!("ffrm-cwd-lock-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > nul"])
+            .current_dir(&dir)
+            .spawn()
+            .unwrap();
+        let inspection = inspect(&dir).unwrap();
+        let found = inspection
+            .lockers
+            .iter()
+            .any(|locker| locker.pid == child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_dir_all(&dir);
+        assert!(inspection.sharing_violation);
+        assert!(
+            found,
+            "expected pid {} among {:?}",
+            child.id(),
+            inspection.lockers
+        );
     }
 }

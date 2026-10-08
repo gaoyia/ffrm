@@ -46,6 +46,7 @@ const HELP_TAIL: &str = "
 直接传入路径只会打开窗口并加入队列，不会删除。
 不会删除磁盘根目录、Windows 目录、用户主目录或 Program Files 本身。
 unlock 会关闭正在使用该文件的程序。程序若没有退出，会结束该进程。关键系统进程会被拒绝。
+目录仍被占用但没有列出进程时，会再查找当前目录正好是该文件夹的进程。
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,7 +218,7 @@ fn delete(command: &Command) -> Result<(), String> {
     let lockers = all_lockers(&inspections);
     if inspections
         .iter()
-        .any(|item| item.list_denied && item.sharing_violation)
+        .any(|item| item.list_denied && item.sharing_violation && item.lockers.is_empty())
     {
         return Err("文件正被占用，但没有权限列出占用进程。".to_string());
     }
@@ -274,7 +275,7 @@ fn all_lockers(inspections: &[Inspection]) -> Vec<Locker> {
 
 fn print_inspection(inspection: &Inspection) -> Result<(), String> {
     emit(&inspection.path.display().to_string());
-    if inspection.list_denied {
+    if inspection.list_denied && inspection.lockers.is_empty() {
         emit("  没有权限列出占用进程");
     }
     if inspection.lockers.is_empty() && !inspection.sharing_violation {
@@ -414,5 +415,32 @@ mod tests {
     fn help_and_missing_path() {
         assert!(matches!(parse_args(["--help"]), Ok(Parsed::Help)));
         assert!(parse_args(["status"]).is_err());
+    }
+
+    #[test]
+    fn deletes_a_directory_held_only_as_a_current_directory() {
+        let dir = std::env::temp_dir().join(format!("ffrm-cwd-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 60 127.0.0.1 > nul"])
+            .current_dir(&dir)
+            .spawn()
+            .unwrap();
+        let result = execute(&Command {
+            action: Action::Delete,
+            paths: vec![dir.clone()],
+            unlock: true,
+            force: true,
+            yes: true,
+            recursive: false,
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        result.unwrap();
+        assert!(!dir.exists());
     }
 }

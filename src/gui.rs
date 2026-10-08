@@ -1406,11 +1406,12 @@ fn actions(lang: Lang, busy: bool, has_items: bool, cx: &mut Context<Desktop>) -
 
 fn action_button(
     id: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
     danger: bool,
     enabled: bool,
     click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let label = label.into();
     let mut button = div()
         .id(id)
         .h(px(36.))
@@ -1546,19 +1547,27 @@ fn version_card(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElemen
         )
 }
 
-fn version_status(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
+fn version_status(desktop: &Desktop, cx: &mut Context<Desktop>) -> gpui::AnyElement {
     let lang = desktop.lang;
-    let open = matches!(desktop.update, UpdateState::Available(_));
     let (caption, color) = match &desktop.update {
-        UpdateState::Checking => (text(lang, "正在检查", "Checking").to_string(), STONE),
-        UpdateState::Current => (text(lang, "已是最新", "Up to date").to_string(), STONE),
         UpdateState::Available(version) => {
-            let caption = match lang {
+            let label = match lang {
                 Lang::Zh => format!("可更新到 {version}"),
                 Lang::En => format!("Update to {version}"),
             };
-            (caption, BRASS)
+            return action_button(
+                "install-update",
+                label,
+                false,
+                true,
+                cx.listener(|this, _, _, cx| {
+                    this.install_update(cx);
+                }),
+            )
+            .into_any_element();
         }
+        UpdateState::Checking => (text(lang, "正在检查", "Checking").to_string(), STONE),
+        UpdateState::Current => (text(lang, "已是最新", "Up to date").to_string(), STONE),
         UpdateState::Installing => (text(lang, "正在更新", "Updating").to_string(), STONE),
         UpdateState::Missing => (
             text(lang, "暂无发布版本", "No release yet").to_string(),
@@ -1570,20 +1579,14 @@ fn version_status(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElem
             0xe7b2a6,
         ),
     };
-    let mut status = div()
+    div()
         .id("update-status")
         .text_sm()
         .line_height(px(20.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(color));
-    if open {
-        status = status
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.install_update(cx);
-            }));
-    }
-    status.child(caption)
+        .text_color(rgb(color))
+        .child(caption)
+        .into_any_element()
 }
 
 fn default_settings(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
@@ -1833,41 +1836,43 @@ pub fn run(initial: Vec<PathBuf>) {
     update::clear_retired();
     let (config, config_error) = Config::load();
     let lang = config.lang;
-    Application::new().with_assets(ChromeAssets).run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1120.), px(630.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(window_title(lang).into()),
-                    appears_transparent: true,
+    Application::new()
+        .with_assets(ChromeAssets)
+        .run(move |cx: &mut App| {
+            let bounds = Bounds::centered(None, size(px(1120.), px(630.)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some(window_title(lang).into()),
+                        appears_transparent: true,
+                        ..Default::default()
+                    }),
+                    window_min_size: Some(size(px(1120.), px(630.))),
                     ..Default::default()
-                }),
-                window_min_size: Some(size(px(1120.), px(630.))),
-                ..Default::default()
-            },
-            move |window, cx| {
-                let pinned = config.pinned;
-                window.on_next_frame(move |window, _cx| {
-                    apply_window_icon(window);
-                    if pinned {
-                        set_topmost(window, true);
-                    }
-                });
-                cx.new(move |cx| {
-                    let mut desktop = Desktop::from_config(
-                        config,
-                        config_error,
-                        cx.focus_handle().tab_stop(true),
-                    );
-                    if !initial.is_empty() {
-                        desktop.add_paths(&initial, cx);
-                    }
-                    desktop
-                })
-            },
-        )
-        .expect("无法打开窗口");
-        cx.activate(true);
-    });
+                },
+                move |window, cx| {
+                    let pinned = config.pinned;
+                    window.on_next_frame(move |window, _cx| {
+                        apply_window_icon(window);
+                        if pinned {
+                            set_topmost(window, true);
+                        }
+                    });
+                    cx.new(move |cx| {
+                        let mut desktop = Desktop::from_config(
+                            config,
+                            config_error,
+                            cx.focus_handle().tab_stop(true),
+                        );
+                        if !initial.is_empty() {
+                            desktop.add_paths(&initial, cx);
+                        }
+                        desktop
+                    })
+                },
+            )
+            .expect("无法打开窗口");
+            cx.activate(true);
+        });
 }
