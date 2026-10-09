@@ -4,7 +4,7 @@
   "description": "Windows MCP server for ffrm: see what locks a file, unlock it, and delete it",
   "type": "module",
   "bin": {
-    "ffrm-mcp": "./bin/ffrm-mcp.js"
+    "ffrm-mcp": "bin/ffrm-mcp.js"
   },
   "files": [
     "bin",
