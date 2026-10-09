@@ -6,6 +6,10 @@ Windows 工具。查看谁占用了本地文件或文件夹，解除占用，然
 
 只支持 Windows。不带参数，或直接传入路径时打开桌面窗口。`status`、`unlock`、`delete` 走命令行。`mcp` 启动给编辑器调用的服务。桌面版、命令行和 MCP 是同一个程序。
 
+![主窗口](img/ScreenShot1.png)
+
+![设置](img/ScreenShot2.png)
+
 ## 下载
 
 安装包发布在 [GitHub Releases](https://github.com/gaoyia/ffrm/releases)。下载页是 [gaoyia.github.io/ffrm](https://gaoyia.github.io/ffrm/)。
@@ -17,6 +21,18 @@ cargo install ffrm
 ```
 
 装好后在命令行运行 `ffrm`。
+
+## 许可与捐赠
+
+本仓库以 MIT 发布，全文在 `LICENSE`。
+
+**强烈谴责A股市场环境**：作者因买入股【华铁股份】现【R通达1】不完全统计**家庭总计亏损高达200万**。目前正在起诉，进入二审阶段，执行更是不知要到什么时候了，这已经是第三、四年了，其余股票也亏损严重，现金流状况至今难以缓解。
+
+故在此赛博要饭接受捐赠，谢谢。
+
+| 微信赞赏码 | 支付宝领红包 | 支付宝 |
+| --- | --- | --- |
+| ![微信赞赏码](https://cdn.jsdelivr.net/gh/gaoyia/gaoyia@v0.0.2/donate.jpg) | ![支付宝领红包](https://cdn.jsdelivr.net/gh/gaoyia/gaoyia@v0.0.2/zfbhb.jpg) | ![支付宝](https://cdn.jsdelivr.net/gh/gaoyia/gaoyia@v0.0.2/zfb.jpg) |
 
 ## 构建
 
