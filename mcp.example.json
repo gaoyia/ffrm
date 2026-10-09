@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ffrm": {
+      "command": "ffrm",
+      "args": ["mcp"]
+    }
+  }
+}

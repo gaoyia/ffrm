@@ -19,6 +19,7 @@ strip = true
 
 [dependencies]
 gpui = "0.2.2"
+serde_json = { version = "1", default-features = false, features = ["std"] }
 raw-window-handle = "0.6"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

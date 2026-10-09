@@ -4,7 +4,7 @@ ffrm 是 file force rm，意思是强制删掉文件。
 
 Windows 工具。查看谁占用了本地文件或文件夹，解除占用，然后删除。
 
-只支持 Windows。不带参数，或直接传入路径时打开桌面窗口。`status`、`unlock`、`delete` 走命令行。桌面版和命令行是同一个程序。
+只支持 Windows。不带参数，或直接传入路径时打开桌面窗口。`status`、`unlock`、`delete` 走命令行。`mcp` 启动给编辑器调用的服务。桌面版、命令行和 MCP 是同一个程序。
 
 ## 下载
 
@@ -43,6 +43,7 @@ ffrm <路径>...
 ffrm status <路径>...
 ffrm unlock <路径>... [--force] [--yes]
 ffrm delete <路径>... [--unlock] [--force] [--yes] [--recursive]
+ffrm mcp
 ```
 
 直接传入路径会打开窗口并把路径放进队列，不会删除。
@@ -91,6 +92,41 @@ ffrm status D:\notes\a.docx
 
 ```text
 ffrm delete D:\notes\a.docx --unlock --yes
+```
+
+## MCP
+
+`ffrm mcp` 启动服务，从标准输入读消息，把结果写回标准输出。已经安装 Rust 时执行 `cargo install ffrm`，或从 [GitHub Releases](https://github.com/gaoyia/ffrm/releases) 下载 `ffrm.exe`。`command` 写 `ffrm`，或者写这个 exe 的完整路径。示例文件是 `mcp.example.json`。
+
+```json
+{
+  "mcpServers": {
+    "ffrm": {
+      "command": "ffrm",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+工具有三个，规则和命令行一样。`status` 查看占用。`unlock` 解除占用。`delete` 删除。`unlock` 和 `delete` 要把 `confirm` 设为 `true` 才会执行。文件被占用时，`delete` 还要把 `unlock` 设为 `true`。目录里还有内容时，把 `recursive` 设为 `true`。`force` 要和 `unlock` 一起用。
+
+编辑器连上后会先发 `initialize`，再发 `tools/list`。删除一个被占用的文件时，调用类似：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "delete",
+    "arguments": {
+      "path": "D:\\notes\\a.docx",
+      "confirm": true,
+      "unlock": true
+    }
+  }
+}
 ```
 
 ## 许可

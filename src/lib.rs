@@ -22,7 +22,8 @@ ffrm {version}
   ffrm <路径>...
   ffrm status <路径>...
   ffrm unlock <路径>... [--force] [--yes]
-  ffrm delete <路径>... [--unlock] [--force] [--yes] [--recursive]",
+  ffrm delete <路径>... [--unlock] [--force] [--yes] [--recursive]
+  ffrm mcp",
         version = env!("CARGO_PKG_VERSION")
     )
 }
@@ -33,6 +34,7 @@ const HELP_TAIL: &str = "
   status   列出占用该文件的进程
   unlock   让占用进程退出以释放文件
   delete   删除文件或目录
+  mcp      启动 MCP 服务，供编辑器调用上面三个命令
 
 选项:
   --unlock       delete 时若文件被占用，先解除占用
@@ -143,11 +145,43 @@ where
     }))
 }
 
+pub struct Report {
+    pub output: String,
+    pub error: Option<String>,
+}
+
 pub fn execute(command: &Command) -> Result<(), String> {
+    let report = run(command);
+    if !report.output.is_empty() {
+        for line in report.output.split('\n') {
+            emit(line);
+        }
+    }
+    match report.error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+pub fn run(command: &Command) -> Report {
     match command.action {
         Action::Status => status(command),
         Action::Unlock => unlock(command),
         Action::Delete => delete(command),
+    }
+}
+
+fn lines_ok(lines: Vec<String>) -> Report {
+    Report {
+        output: lines.join("\n"),
+        error: None,
+    }
+}
+
+fn lines_err(lines: Vec<String>, error: String) -> Report {
+    Report {
+        output: lines.join("\n"),
+        error: Some(error),
     }
 }
 
@@ -164,94 +198,131 @@ fn parse_action(text: &str) -> Result<Action, String> {
     }
 }
 
-fn status(command: &Command) -> Result<(), String> {
+fn status(command: &Command) -> Report {
+    let mut lines = Vec::new();
     for path in &command.paths {
-        print_inspection(&inspect(path)?)?;
+        match inspect(path) {
+            Ok(inspection) => lines.extend(inspection_lines(&inspection)),
+            Err(error) => return lines_err(lines, error),
+        }
     }
-    Ok(())
+    lines_ok(lines)
 }
 
-fn unlock(command: &Command) -> Result<(), String> {
-    let inspections = inspect_all(command)?;
+fn unlock(command: &Command) -> Report {
+    let mut lines = Vec::new();
+    let inspections = match inspect_all(command) {
+        Ok(inspections) => inspections,
+        Err(error) => return lines_err(lines, error),
+    };
     let lockers = all_lockers(&inspections);
     if inspections.iter().any(|item| item.list_denied) && lockers.is_empty() {
         if inspections.iter().any(|item| item.sharing_violation) {
-            return Err("文件正被占用，但没有权限列出占用进程，无法解除占用。".to_string());
+            return lines_err(
+                lines,
+                "文件正被占用，但没有权限列出占用进程，无法解除占用。".to_string(),
+            );
         }
-        emit("没有权限列出占用进程，也没有检测到文件被占用。");
-        return Ok(());
+        lines.push("没有权限列出占用进程，也没有检测到文件被占用。".to_string());
+        return lines_ok(lines);
     }
     if lockers.is_empty() && inspections.iter().all(|item| !item.sharing_violation) {
-        emit("没有进程占用这些文件。");
-        return Ok(());
+        lines.push("没有进程占用这些文件。".to_string());
+        return lines_ok(lines);
     }
     if let Some(reason) = critical_block(&lockers) {
-        return Err(reason);
+        return lines_err(lines, reason);
     }
     if lockers.is_empty() {
-        return Err("文件正被占用，但没有列出可关闭的进程。请先关闭相关程序。".to_string());
+        return lines_err(
+            lines,
+            "文件正被占用，但没有列出可关闭的进程。请先关闭相关程序。".to_string(),
+        );
     }
-    emit("将关闭以下程序以释放文件:");
-    print_lockers(&lockers);
-    confirm(command.yes)?;
+    lines.push("将关闭以下程序以释放文件:".to_string());
+    lines.extend(locker_lines(&lockers));
+    if let Err(error) = confirm(command.yes) {
+        return lines_err(lines, error);
+    }
     for inspection in &inspections {
         if inspection.lockers.is_empty() {
             continue;
         }
-        release(&inspection.path, command.force)?;
-        let again = inspect(&inspection.path)?;
-        if again.sharing_violation || !again.lockers.is_empty() {
-            return Err(format!("{} 仍被占用", inspection.path.display()));
+        if let Err(error) = release(&inspection.path, command.force) {
+            return lines_err(lines, error);
         }
-        emit(&format!("已释放 {}", inspection.path.display()));
+        let again = match inspect(&inspection.path) {
+            Ok(again) => again,
+            Err(error) => return lines_err(lines, error),
+        };
+        if again.sharing_violation || !again.lockers.is_empty() {
+            return lines_err(lines, format!("{} 仍被占用", inspection.path.display()));
+        }
+        lines.push(format!("已释放 {}", inspection.path.display()));
     }
-    Ok(())
+    lines_ok(lines)
 }
 
-fn delete(command: &Command) -> Result<(), String> {
+fn delete(command: &Command) -> Report {
+    let mut lines = Vec::new();
     for path in &command.paths {
         if let Some(reason) = block_reason(path) {
-            return Err(format!("{}: {reason}", path.display()));
+            return lines_err(lines, format!("{}: {reason}", path.display()));
         }
     }
-    let inspections = inspect_all(command)?;
+    let inspections = match inspect_all(command) {
+        Ok(inspections) => inspections,
+        Err(error) => return lines_err(lines, error),
+    };
     let lockers = all_lockers(&inspections);
     if inspections
         .iter()
         .any(|item| item.list_denied && item.sharing_violation && item.lockers.is_empty())
     {
-        return Err("文件正被占用，但没有权限列出占用进程。".to_string());
+        return lines_err(lines, "文件正被占用，但没有权限列出占用进程。".to_string());
     }
     let busy = inspections.iter().any(|item| item.sharing_violation) || !lockers.is_empty();
     if busy && !command.unlock {
         for inspection in &inspections {
-            print_inspection(inspection)?;
+            lines.extend(inspection_lines(inspection));
         }
-        return Err("文件被占用。确认要关闭占用程序并删除时，请加上 --unlock。".to_string());
+        return lines_err(
+            lines,
+            "文件被占用。确认要关闭占用程序并删除时，请加上 --unlock。".to_string(),
+        );
     }
     if let Some(reason) = critical_block(&lockers) {
-        return Err(reason);
+        return lines_err(lines, reason);
     }
     if command.unlock && lockers.is_empty() && busy {
-        return Err("文件正被占用，但没有列出可关闭的进程。请先关闭相关程序。".to_string());
+        return lines_err(
+            lines,
+            "文件正被占用，但没有列出可关闭的进程。请先关闭相关程序。".to_string(),
+        );
     }
-    emit("将删除:");
+    lines.push("将删除:".to_string());
     for inspection in &inspections {
-        emit(&format!("  {}", inspection.path.display()));
+        lines.push(format!("  {}", inspection.path.display()));
     }
     if command.unlock && !lockers.is_empty() {
-        emit("将关闭以下程序:");
-        print_lockers(&lockers);
+        lines.push("将关闭以下程序:".to_string());
+        lines.extend(locker_lines(&lockers));
     }
-    confirm(command.yes)?;
+    if let Err(error) = confirm(command.yes) {
+        return lines_err(lines, error);
+    }
     for inspection in &inspections {
         if command.unlock && !inspection.lockers.is_empty() {
-            release(&inspection.path, command.force)?;
+            if let Err(error) = release(&inspection.path, command.force) {
+                return lines_err(lines, error);
+            }
         }
-        let removed = delete_path(&inspection.path, command.recursive)?;
-        emit(&format!("已删除 {}", removed.display()));
+        match delete_path(&inspection.path, command.recursive) {
+            Ok(removed) => lines.push(format!("已删除 {}", removed.display())),
+            Err(error) => return lines_err(lines, error),
+        }
     }
-    Ok(())
+    lines_ok(lines)
 }
 
 fn inspect_all(command: &Command) -> Result<Vec<Inspection>, String> {
@@ -273,37 +344,40 @@ fn all_lockers(inspections: &[Inspection]) -> Vec<Locker> {
     lockers
 }
 
-fn print_inspection(inspection: &Inspection) -> Result<(), String> {
-    emit(&inspection.path.display().to_string());
+fn inspection_lines(inspection: &Inspection) -> Vec<String> {
+    let mut lines = vec![inspection.path.display().to_string()];
     if inspection.list_denied && inspection.lockers.is_empty() {
-        emit("  没有权限列出占用进程");
+        lines.push("  没有权限列出占用进程".to_string());
     }
     if inspection.lockers.is_empty() && !inspection.sharing_violation {
         if !inspection.list_denied {
-            emit("  没有进程占用此文件");
+            lines.push("  没有进程占用此文件".to_string());
         }
-        return Ok(());
+        return lines;
     }
     if inspection.lockers.is_empty() {
-        emit("  文件正被占用，但没有列出可关闭的进程");
-        return Ok(());
+        lines.push("  文件正被占用，但没有列出可关闭的进程".to_string());
+        return lines;
     }
-    print_lockers(&inspection.lockers);
-    Ok(())
+    lines.extend(locker_lines(&inspection.lockers));
+    lines
 }
 
-fn print_lockers(lockers: &[Locker]) {
-    for locker in lockers {
-        let mut line = format!("  pid {}  {}", locker.pid, display_name(locker));
-        if let Some(image) = &locker.image {
-            line.push_str("  ");
-            line.push_str(image);
-        }
-        if is_critical(locker) {
-            line.push_str("  [关键系统进程]");
-        }
-        emit(&line);
-    }
+fn locker_lines(lockers: &[Locker]) -> Vec<String> {
+    lockers
+        .iter()
+        .map(|locker| {
+            let mut line = format!("  pid {}  {}", locker.pid, display_name(locker));
+            if let Some(image) = &locker.image {
+                line.push_str("  ");
+                line.push_str(image);
+            }
+            if is_critical(locker) {
+                line.push_str("  [关键系统进程]");
+            }
+            line
+        })
+        .collect()
 }
 
 fn confirm(yes: bool) -> Result<(), String> {

@@ -1,5 +1,6 @@
 mod config;
 mod gui;
+mod mcp;
 mod menu;
 mod update;
 
@@ -12,13 +13,20 @@ fn launch_window(args: &[std::ffi::OsString]) -> bool {
         None => true,
         Some(arg) => {
             let text = arg.to_string_lossy();
-            !text.starts_with('-') && !matches!(text.as_ref(), "status" | "unlock" | "delete")
+            !text.starts_with('-') && !matches!(text.as_ref(), "status" | "unlock" | "delete" | "mcp")
         }
     }
 }
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().and_then(|arg| arg.to_str()) == Some("mcp") {
+        if args.len() != 1 {
+            ffrm::emit_err("mcp 不接受其他参数");
+            return ExitCode::from(1);
+        }
+        return mcp::serve();
+    }
     if launch_window(&args) {
         let paths = args.into_iter().map(std::path::PathBuf::from).collect();
         unsafe { FreeConsole() };
@@ -67,6 +75,7 @@ mod tests {
         assert!(launch_window(&[]));
         assert!(launch_window(&args(&[r"D:\temp\a.txt"])));
         assert!(!launch_window(&args(&["status", r"D:\temp\a.txt"])));
+        assert!(!launch_window(&args(&["mcp"])));
         assert!(!launch_window(&args(&["--help"])));
         assert!(!launch_window(&args(&["--version"])));
     }
