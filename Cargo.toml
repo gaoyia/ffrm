@@ -8,7 +8,7 @@ repository = "https://github.com/gaoyia/ffrm"
 homepage = "https://gaoyia.github.io/ffrm/"
 readme = "README.md"
 build = "build.rs"
-exclude = [".github/", "site/", "npm/"]
+exclude = [".github/", "site/"]
 
 [profile.release]
 opt-level = "z"

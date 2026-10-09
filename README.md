@@ -93,23 +93,6 @@ ffrm status D:\notes\a.docx
 ffrm delete D:\notes\a.docx --unlock --yes
 ```
 
-## MCP
-
-`ffrm-mcp` 是给编辑器代理用的 npm 包，只在 Windows 上工作。安装时会下载对应版本的 `ffrm.exe`。
-
-工具有三个：`status` 查看占用，`unlock` 解除占用，`delete` 删除。`unlock` 和 `delete` 要把 `confirm` 设为 `true` 才会执行。
-
-```json
-{
-  "mcpServers": {
-    "ffrm": {
-      "command": "npx",
-      "args": ["-y", "ffrm-mcp"]
-    }
-  }
-}
-```
-
 ## 许可
 
 本项目使用 MIT 许可，文本在 `LICENSE`。Release 构建会把同一份文件复制到 `target\release\LICENSE`。
