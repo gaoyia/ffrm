@@ -1,0 +1,41 @@
+{
+  "name": "ffrm-mcp",
+  "version": "0.1.4",
+  "description": "Windows MCP server for ffrm: see what locks a file, unlock it, and delete it",
+  "type": "module",
+  "bin": {
+    "ffrm-mcp": "./bin/ffrm-mcp.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node ./src/download.js",
+    "start": "node ./bin/ffrm-mcp.js",
+    "test": "node --test src/args.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gaoyia/ffrm.git",
+    "directory": "npm/ffrm-mcp"
+  },
+  "homepage": "https://github.com/gaoyia/ffrm",
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.3.1",
+    "zod": "^4.1.12"
+  }
+}

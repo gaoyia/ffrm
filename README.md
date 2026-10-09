@@ -1,5 +1,7 @@
 # ffrm
 
+ffrm 是 file force rm，意思是强制删掉文件。
+
 Windows 工具。查看谁占用了本地文件或文件夹，解除占用，然后删除。
 
 只支持 Windows。不带参数，或直接传入路径时打开桌面窗口。`status`、`unlock`、`delete` 走命令行。桌面版和命令行是同一个程序。
@@ -89,6 +91,23 @@ ffrm status D:\notes\a.docx
 
 ```text
 ffrm delete D:\notes\a.docx --unlock --yes
+```
+
+## MCP
+
+`ffrm-mcp` 是给编辑器代理用的 npm 包，只在 Windows 上工作。安装时会下载对应版本的 `ffrm.exe`。
+
+工具有三个：`status` 查看占用，`unlock` 解除占用，`delete` 删除。`unlock` 和 `delete` 要把 `confirm` 设为 `true` 才会执行。
+
+```json
+{
+  "mcpServers": {
+    "ffrm": {
+      "command": "npx",
+      "args": ["-y", "ffrm-mcp"]
+    }
+  }
+}
 ```
 
 ## 许可
