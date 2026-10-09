@@ -1627,6 +1627,7 @@ version = "0.1.4"
 dependencies = [
  "gpui",
  "raw-window-handle",
+ "serde_json",
  "windows-sys 0.59.0",
  "winresource",
 ]
