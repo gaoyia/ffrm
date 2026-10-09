@@ -1,6 +1,6 @@
 [package]
 name = "ffrm"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "查看谁占用了本地文件，解除占用，并删除文件"
 license = "MIT"
