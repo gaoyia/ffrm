@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 use std::fs;
 use std::io::Write;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -11,9 +12,10 @@ use windows_sys::Win32::Networking::WinHttp::{
     WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
     WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2, WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3,
     WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
-    WINHTTP_OPTION_SECURE_PROTOCOLS, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LOCATION,
-    WINHTTP_QUERY_STATUS_CODE,
+    WINHTTP_OPTION_SECURE_PROTOCOLS, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_FLAG_NUMBER,
+    WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE,
 };
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const RELEASES_LATEST: &str = "/gaoyia/ffrm/releases/latest";
 const EXE_LIMIT: usize = 64 * 1024 * 1024;
@@ -24,6 +26,12 @@ pub enum Status {
     Available(String),
     Missing,
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallStep {
+    Download(Option<u8>),
+    Replace,
 }
 
 #[derive(Debug)]
@@ -52,15 +60,16 @@ pub fn check(current: &str) -> Status {
     }
 }
 
-pub fn install() -> Result<(), ()> {
+pub fn install(mut report: impl FnMut(InstallStep) + Send) -> Result<(), ()> {
     let current = std::env::current_exe().map_err(|_| ())?;
     let (retired, incoming) = stage_paths(&current).ok_or(())?;
     let tag = fetch_tag().map_err(|_| ())?;
     let url = release_exe(&tag);
-    if download(&url, &incoming).is_err() {
+    if download(&url, &incoming, &mut report).is_err() {
         let _ = fs::remove_file(&incoming);
         return Err(());
     }
+    report(InstallStep::Replace);
     if !swap_in(&current, &incoming, &retired) {
         let _ = fs::remove_file(&incoming);
         return Err(());
@@ -147,9 +156,17 @@ fn latest_location() -> Result<String, FetchError> {
     }
 }
 
-fn download(url: &str, dest: &Path) -> Result<(), FetchError> {
+fn download(url: &str, dest: &Path, report: &mut dyn FnMut(InstallStep)) -> Result<(), FetchError> {
     let (host, path) = split_https(url).ok_or(FetchError::Network)?;
-    let bytes = http_get(&host, &path, "application/octet-stream", EXE_LIMIT)?;
+    let bytes = http_get(
+        &host,
+        &path,
+        "application/octet-stream",
+        EXE_LIMIT,
+        |percent| {
+            report(InstallStep::Download(percent));
+        },
+    )?;
     if bytes.len() < 64 || bytes.first_chunk::<2>() != Some(b"MZ") {
         return Err(FetchError::Network);
     }
@@ -251,7 +268,13 @@ fn open_request(
     }
 }
 
-fn http_get(host: &str, path: &str, accept: &str, max: usize) -> Result<Vec<u8>, FetchError> {
+fn http_get(
+    host: &str,
+    path: &str,
+    accept: &str,
+    max: usize,
+    on_progress: impl FnMut(Option<u8>),
+) -> Result<Vec<u8>, FetchError> {
     let exchange = open_request(host, path, accept, true)?;
     unsafe {
         if WinHttpSendRequest(
@@ -273,7 +296,7 @@ fn http_get(host: &str, path: &str, accept: &str, max: usize) -> Result<Vec<u8>,
         if status != 200 {
             return Err(FetchError::Network);
         }
-        read_body(exchange.request.0, max)
+        read_body(exchange.request.0, max, on_progress)
     }
 }
 
@@ -333,8 +356,53 @@ fn status_code(request: *mut c_void) -> Result<u32, FetchError> {
     }
 }
 
-fn read_body(request: *mut c_void, max: usize) -> Result<Vec<u8>, FetchError> {
+fn content_length(request: *mut c_void) -> Option<u64> {
+    let mut length = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let ok = unsafe {
+        WinHttpQueryHeaders(
+            request,
+            WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+            std::ptr::null(),
+            &mut length as *mut u32 as *mut c_void,
+            &mut size,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok != 0 && length > 0 {
+        return Some(u64::from(length));
+    }
+    let text = query_header(request, WINHTTP_QUERY_CONTENT_LENGTH).ok()?;
+    let parsed = text.trim().parse::<u64>().ok()?;
+    if parsed == 0 {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+fn download_percent(received: usize, total: u64) -> u8 {
+    if total == 0 {
+        return 0;
+    }
+    ((received as u64).saturating_mul(100) / total).min(100) as u8
+}
+
+fn read_body(
+    request: *mut c_void,
+    max: usize,
+    mut on_progress: impl FnMut(Option<u8>),
+) -> Result<Vec<u8>, FetchError> {
+    let total = content_length(request);
     let mut body = Vec::new();
+    let mut reported: Option<Option<u8>> = None;
+    let mut report = |percent: Option<u8>| {
+        if reported != Some(percent) {
+            reported = Some(percent);
+            on_progress(percent);
+        }
+    };
+    report(total.map(|_| 0));
     loop {
         let mut buffer = [0u8; 8192];
         let mut read = 0u32;
@@ -356,6 +424,12 @@ fn read_body(request: *mut c_void, max: usize) -> Result<Vec<u8>, FetchError> {
         if body.len() > max {
             return Err(FetchError::Network);
         }
+        if let Some(total) = total {
+            report(Some(download_percent(body.len(), total)));
+        }
+    }
+    if total.is_some() {
+        report(Some(100));
     }
     Ok(body)
 }
@@ -387,7 +461,11 @@ fn relaunch(exe: &Path) -> Result<(), ()> {
     if let Some(dir) = exe.parent() {
         command.current_dir(dir);
     }
-    command.spawn().map(|_| ()).map_err(|_| ())
+    command
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| ())
 }
 
 fn split_https(url: &str) -> Option<(String, String)> {
@@ -435,6 +513,15 @@ mod tests {
     fn same_version_is_current() {
         assert_eq!(compare("0.1.0", "v0.1.0"), Status::Current);
         assert_eq!(compare("0.2.0", "v0.1.0"), Status::Current);
+    }
+
+    #[test]
+    fn download_percent_follows_the_received_share() {
+        assert_eq!(download_percent(0, 200), 0);
+        assert_eq!(download_percent(50, 200), 25);
+        assert_eq!(download_percent(200, 200), 100);
+        assert_eq!(download_percent(250, 200), 100);
+        assert_eq!(download_percent(1, 0), 0);
     }
 
     #[test]

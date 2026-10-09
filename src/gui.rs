@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    canvas, div, ease_in_out, fill, point, prelude::*, px, rgb, size, svg, Animation, AnimationExt,
-    App, Application, AssetSource, Bounds, ClipboardItem, Context, ExternalPaths, FocusHandle,
-    FontWeight, HighlightStyle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ScrollHandle, SharedString, StyledText, TextLayout, TitlebarOptions, Window,
-    WindowBounds, WindowControlArea, WindowOptions,
+    canvas, div, ease_in_out, fill, point, prelude::*, px, relative, rgb, size, svg, Animation,
+    AnimationExt, App, Application, AssetSource, Bounds, ClipboardItem, Context, ExternalPaths,
+    FocusHandle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, ScrollHandle, SharedString, StyledText, TextLayout,
+    TitlebarOptions, Window, WindowBounds, WindowControlArea, WindowOptions,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -14,7 +16,7 @@ use ffrm::Inspection;
 
 use crate::config::{self, Config, Lang};
 use crate::menu::{self, MenuState};
-use crate::update::{self, Status};
+use crate::update::{self, InstallStep, Status};
 
 const CANVAS: u32 = 0x12110f;
 const INK: u32 = 0x1c1a17;
@@ -24,6 +26,7 @@ const STONE: u32 = 0xa89b8c;
 const BRASS: u32 = 0xc6a57a;
 const DELETE: u32 = 0xb5523e;
 const DELETE_PRESSED: u32 = 0x8c3f2e;
+const PRESSED: u32 = 0x2a261f;
 const LIST_RADIUS: f32 = 24.;
 
 fn text(lang: Lang, zh: &'static str, en: &'static str) -> &'static str {
@@ -47,10 +50,12 @@ enum Page {
     Settings,
 }
 
+#[derive(PartialEq, Eq)]
 enum UpdateState {
     Checking,
     Current,
     Available(String),
+    Downloading(Option<u8>),
     Installing,
     Missing,
     Failed,
@@ -259,7 +264,7 @@ impl Desktop {
     }
 
     fn check_update(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.update, UpdateState::Installing) {
+        if update_in_progress(&self.update) {
             return;
         }
         self.update_epoch = self.update_epoch.wrapping_add(1);
@@ -270,7 +275,7 @@ impl Desktop {
                 .background_spawn(async { update::check(env!("CARGO_PKG_VERSION")) })
                 .await;
             this.update(cx, |this, cx| {
-                if this.update_epoch == epoch && !matches!(this.update, UpdateState::Installing) {
+                if this.update_epoch == epoch && !update_in_progress(&this.update) {
                     this.update = UpdateState::from(status);
                     cx.notify();
                 }
@@ -284,14 +289,57 @@ impl Desktop {
         if !matches!(self.update, UpdateState::Available(_)) {
             return;
         }
-        self.update = UpdateState::Installing;
+        self.update = UpdateState::Downloading(Some(0));
         cx.notify();
+        let percent = Arc::new(AtomicI8::new(0));
+        let phase = Arc::new(AtomicU8::new(0));
+        let finished = Arc::new(AtomicBool::new(false));
+        let percent_watch = percent.clone();
+        let phase_watch = phase.clone();
+        let finished_watch = finished.clone();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async { update::install() }).await;
+            let task = cx.background_spawn(async move {
+                let result = update::install(|step| match step {
+                    InstallStep::Download(value) => {
+                        let stored = value.map(|value| value as i8).unwrap_or(-1);
+                        percent.store(stored, Ordering::Relaxed);
+                        phase.store(0, Ordering::Relaxed);
+                    }
+                    InstallStep::Replace => phase.store(1, Ordering::Relaxed),
+                });
+                finished.store(true, Ordering::Release);
+                result
+            });
+            loop {
+                let phase = phase_watch.load(Ordering::Relaxed);
+                let percent = percent_watch.load(Ordering::Relaxed);
+                let done = finished_watch.load(Ordering::Acquire);
+                this.update(cx, |this, cx| {
+                    let next = if phase == 1 {
+                        UpdateState::Installing
+                    } else if percent < 0 {
+                        UpdateState::Downloading(None)
+                    } else {
+                        UpdateState::Downloading(Some(percent as u8))
+                    };
+                    if this.update != next {
+                        this.update = next;
+                        cx.notify();
+                    }
+                })
+                .ok();
+                if done {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(80))
+                    .await;
+            }
+            let result = task.await;
             this.update(cx, |this, cx| {
                 if result.is_ok() {
                     cx.quit();
-                } else if matches!(this.update, UpdateState::Installing) {
+                } else if update_in_progress(&this.update) {
                     this.update = UpdateState::UpdateFailed;
                     cx.notify();
                 }
@@ -947,6 +995,7 @@ impl AssetSource for ChromeAssets {
             "chrome/maximize.svg" => include_bytes!("../assets/chrome/maximize.svg"),
             "chrome/restore.svg" => include_bytes!("../assets/chrome/restore.svg"),
             "chrome/close.svg" => include_bytes!("../assets/chrome/close.svg"),
+            "chrome/github.svg" => include_bytes!("../assets/chrome/github.svg"),
             _ => return Ok(None),
         };
         Ok(Some(std::borrow::Cow::Borrowed(svg)))
@@ -1446,7 +1495,7 @@ fn action_button(
             if enabled && danger {
                 style.bg(rgb(DELETE_PRESSED))
             } else if enabled {
-                style.bg(rgb(0x2a261f))
+                style.bg(rgb(PRESSED))
             } else {
                 style
             }
@@ -1457,6 +1506,38 @@ fn action_button(
             }
         })
         .child(label)
+}
+
+fn update_in_progress(state: &UpdateState) -> bool {
+    matches!(state, UpdateState::Downloading(_) | UpdateState::Installing)
+}
+
+fn progress_button(label: String, fraction: f32) -> gpui::AnyElement {
+    let fraction = fraction.clamp(0., 1.);
+    let mut button = div()
+        .id("install-update")
+        .relative()
+        .overflow_hidden()
+        .h(px(36.))
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(LINE))
+        .text_sm()
+        .text_color(rgb(CREAM));
+    if fraction > 0. {
+        button = button.child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(relative(fraction))
+                .bg(rgb(PRESSED)),
+        );
+    }
+    button
+        .child(div().px_4().h(px(36.)).flex().items_center().child(label))
+        .into_any_element()
 }
 
 fn settings_page(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
@@ -1519,10 +1600,17 @@ fn version_card(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElemen
         .line_height(px(20.))
         .child(
             div()
-                .text_sm()
-                .line_height(px(20.))
-                .text_color(rgb(STONE))
-                .child(text(lang, "版本", "Version")),
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .line_height(px(20.))
+                        .text_color(rgb(STONE))
+                        .child(text(lang, "版本号", "Version")),
+                )
+                .child(github_button()),
         )
         .child(
             div()
@@ -1541,10 +1629,55 @@ fn version_card(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElemen
                     "check-update",
                     text(lang, "检查新版", "Check again"),
                     false,
-                    !matches!(desktop.update, UpdateState::Installing),
+                    !update_in_progress(&desktop.update),
                     cx.listener(|this, _event, _window, cx| this.check_update(cx)),
                 )),
         )
+}
+
+fn github_button() -> impl IntoElement {
+    div()
+        .id("open-github")
+        .group("open-github")
+        .w(px(28.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(PRESSED)))
+        .active(|style| style.bg(rgb(LINE)))
+        .on_click(|_event, _window, _cx| open_repo())
+        .child(
+            svg()
+                .path("chrome/github.svg")
+                .id("chrome/github.svg")
+                .flex_shrink_0()
+                .w(px(16.))
+                .h(px(16.))
+                .text_color(rgb(STONE))
+                .group_hover("open-github", |style| style.text_color(rgb(CREAM)))
+                .group_active("open-github", |style| style.text_color(rgb(BRASS))),
+        )
+}
+
+fn open_repo() {
+    let operation: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+    let file: Vec<u16> = "https://github.com/gaoyia/ffrm"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        windows_sys::Win32::UI::Shell::ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        );
+    }
 }
 
 fn version_status(desktop: &Desktop, cx: &mut Context<Desktop>) -> gpui::AnyElement {
@@ -1566,9 +1699,24 @@ fn version_status(desktop: &Desktop, cx: &mut Context<Desktop>) -> gpui::AnyElem
             )
             .into_any_element();
         }
+        UpdateState::Downloading(percent) => {
+            let (label, fraction) = match percent {
+                Some(percent) => (
+                    match lang {
+                        Lang::Zh => format!("下载中 {percent}%"),
+                        Lang::En => format!("Downloading {percent}%"),
+                    },
+                    *percent as f32 / 100.,
+                ),
+                None => (text(lang, "正在下载", "Downloading").to_string(), 0.),
+            };
+            return progress_button(label, fraction);
+        }
+        UpdateState::Installing => {
+            return progress_button(text(lang, "正在更新", "Updating").to_string(), 1.);
+        }
         UpdateState::Checking => (text(lang, "正在检查", "Checking").to_string(), STONE),
         UpdateState::Current => (text(lang, "已是最新", "Up to date").to_string(), STONE),
-        UpdateState::Installing => (text(lang, "正在更新", "Updating").to_string(), STONE),
         UpdateState::Missing => (
             text(lang, "暂无发布版本", "No release yet").to_string(),
             STONE,
