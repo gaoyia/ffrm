@@ -12,7 +12,7 @@ Windows 和 macOS 工具。查看谁占用了本地文件或文件夹，解除�
 
 ## 下载
 
-安装包发布在 [GitHub Releases](https://github.com/gaoyia/ffrm/releases)。下载页是 [gaoyia.github.io/ffrm](https://gaoyia.github.io/ffrm/)。Windows 安装包是 `ffrm-setup-x64.exe`，装到当前用户目录。macOS 安装包是 `ffrm-arm64.dmg`，面向 Apple 芯片，打开后把 `ffrm.app` 拖进「应用程序」。绿色版仍然发布：Windows 是 `ffrm-x64.exe`，macOS 是 `ffrm-arm64`。发布里同时保留旧文件名 `ffrm.exe`，已经安装的 Windows 程序仍能从这里更新。程序内更新替换的是正在运行的程序文件，不下载安装包。
+安装包发布在 [GitHub Releases](https://github.com/gaoyia/ffrm/releases)。下载页是 [gaoyia.github.io/ffrm](https://gaoyia.github.io/ffrm/)。Windows 安装包是 `ffrm-win-x64-setup.exe`，装到当前用户目录。macOS 安装包是 `ffrm-darwin-arm64.dmg`，面向 Apple 芯片，打开后把 `ffrm.app` 拖进「应用程序」。绿色版仍然发布：Windows 是 `ffrm-win-x64.exe`，macOS 是 `ffrm-darwin-arm64`。发布里同时保留旧文件名 `ffrm.exe` 和 `ffrm`，已经安装的程序仍能从这里更新。程序内更新替换的是正在运行的程序文件，不下载安装包。
 
 已经安装 Rust 时，可以执行：
 
@@ -54,7 +54,7 @@ cargo build --release
 
 ## macOS
 
-发布里的绿色版文件名是 `ffrm-arm64`，安装包是 `ffrm-arm64.dmg`，面向 Apple 芯片。程序内更新下载的是绿色版 `ffrm-arm64`。标题栏使用系统红绿灯，字体是苹方。
+发布里的绿色版文件名是 `ffrm-darwin-arm64`，安装包是 `ffrm-darwin-arm64.dmg`，面向 Apple 芯片。程序内更新下载的是绿色版 `ffrm-darwin-arm64`。标题栏使用系统红绿灯，字体是苹方。
 
 右键菜单的第一层不能加入自定义项。设置里的「添加到右键菜单」会给当前用户安装访达服务，文件在 `~/Library/Services/ffrm.workflow`。先选中文件或文件夹，再点屏幕左上角的「访达 → 服务 → 强制解锁删除」。这一项会打开窗口并把路径放进队列，不会直接删除。
 
@@ -127,7 +127,7 @@ ffrm delete D:\notes\a.docx --unlock --yes
 
 ## MCP
 
-`ffrm mcp` 启动服务，从标准输入读消息，把结果写回标准输出。已经安装 Rust 时执行 `cargo install ffrm`，或从 [GitHub Releases](https://github.com/gaoyia/ffrm/releases) 下载 `ffrm-x64.exe`。macOS 的发布文件名是 `ffrm-arm64`。`command` 写 `ffrm`，或者写这个程序的完整路径。示例文件是 `mcp.example.json`。
+`ffrm mcp` 启动服务，从标准输入读消息，把结果写回标准输出。已经安装 Rust 时执行 `cargo install ffrm`，或从 [GitHub Releases](https://github.com/gaoyia/ffrm/releases) 下载 `ffrm-win-x64.exe`。macOS 的发布文件名是 `ffrm-darwin-arm64`。`command` 写 `ffrm`，或者写这个程序的完整路径。示例文件是 `mcp.example.json`。
 
 ```json
 {

@@ -107,7 +107,7 @@ fn fetch_tag() -> Result<String, FetchError> {
 }
 
 fn release_exe(tag: &str) -> String {
-    format!("https://github.com/gaoyia/ffrm/releases/download/{tag}/ffrm-x64.exe")
+    format!("https://github.com/gaoyia/ffrm/releases/download/{tag}/ffrm-win-x64.exe")
 }
 
 fn release_tag(location: &str) -> Result<String, FetchError> {
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(release_tag(location).unwrap(), "v0.2.0");
         assert_eq!(
             release_exe("v0.2.0"),
-            "https://github.com/gaoyia/ffrm/releases/download/v0.2.0/ffrm-x64.exe"
+            "https://github.com/gaoyia/ffrm/releases/download/v0.2.0/ffrm-win-x64.exe"
         );
     }
 
