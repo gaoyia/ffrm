@@ -7,15 +7,15 @@ use gpui::{
     canvas, div, ease_in_out, fill, point, prelude::*, px, relative, rgb, size, svg, Animation,
     AnimationExt, App, Application, AssetSource, Bounds, ClipboardItem, Context, ExternalPaths,
     FocusHandle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ScrollHandle, SharedString, StyledText, TextLayout,
-    TitlebarOptions, Window, WindowBounds, WindowControlArea, WindowOptions,
+    MouseDownEvent, MouseMoveEvent, ScrollHandle, SharedString, StyledText, TextLayout, Window,
+    WindowBounds, WindowControlArea, WindowOptions,
 };
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use ffrm::Inspection;
 
 use crate::config::{self, Config, Lang};
 use crate::menu::{self, MenuState};
+use crate::platform;
 use crate::update::{self, InstallStep, Status};
 
 const CANVAS: u32 = 0x12110f;
@@ -124,7 +124,6 @@ pub struct Desktop {
     config_error: Option<String>,
     menu_state: MenuState,
     menu_note: Option<Note>,
-    win11: bool,
     update_epoch: u64,
     update_checked: bool,
     update: UpdateState,
@@ -157,7 +156,6 @@ impl Desktop {
             config_error,
             menu_state: MenuState::Absent,
             menu_note: None,
-            win11: menu::windows_11(),
             update_epoch: 0,
             update_checked: false,
             update: UpdateState::Checking,
@@ -225,7 +223,7 @@ impl Desktop {
 
     fn toggle_pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pinned = !self.pinned;
-        set_topmost(window, self.pinned);
+        platform::set_topmost(window, self.pinned);
         self.persist();
         cx.notify();
     }
@@ -580,78 +578,6 @@ fn failure(path: &Path, reason: String, unlock: bool) -> Failure {
     }
 }
 
-fn window_hwnd(window: &Window) -> Option<windows_sys::Win32::Foundation::HWND> {
-    let handle = HasWindowHandle::window_handle(window).ok()?;
-    let RawWindowHandle::Win32(win32) = handle.as_raw() else {
-        return None;
-    };
-    Some(win32.hwnd.get() as windows_sys::Win32::Foundation::HWND)
-}
-
-fn apply_window_icon(window: &Window) {
-    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        LoadImageW, SendMessageW, ICON_BIG, ICON_SMALL, IMAGE_ICON, WM_SETICON,
-    };
-    let Some(hwnd) = window_hwnd(window) else {
-        return;
-    };
-    let module = unsafe { GetModuleHandleW(std::ptr::null()) };
-    if module.is_null() {
-        return;
-    }
-    unsafe {
-        let big = LoadImageW(module, 1 as *const u16, IMAGE_ICON, 32, 32, 0);
-        let small = LoadImageW(module, 1 as *const u16, IMAGE_ICON, 16, 16, 0);
-        if !big.is_null() {
-            SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, big as isize);
-        }
-        if !small.is_null() {
-            SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, small as isize);
-        }
-    }
-}
-
-fn set_topmost(window: &Window, topmost: bool) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    };
-    let Some(hwnd) = window_hwnd(window) else {
-        return;
-    };
-    let after = if topmost {
-        HWND_TOPMOST
-    } else {
-        HWND_NOTOPMOST
-    };
-    unsafe {
-        SetWindowPos(
-            hwnd,
-            after,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
-    }
-}
-
-fn toggle_zoom(window: &Window) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindowAsync, SW_MAXIMIZE, SW_RESTORE};
-    let Some(hwnd) = window_hwnd(window) else {
-        return;
-    };
-    let command = if window.is_maximized() {
-        SW_RESTORE
-    } else {
-        SW_MAXIMIZE
-    };
-    unsafe {
-        ShowWindowAsync(hwnd, command);
-    }
-}
-
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.busy;
@@ -664,7 +590,7 @@ impl Render for Desktop {
             .flex_col()
             .bg(rgb(CANVAS))
             .text_color(rgb(CREAM))
-            .font_family("Microsoft YaHei UI")
+            .font_family(platform::ui_font())
             .on_drop(cx.listener(|this, dropped: &ExternalPaths, _window, cx| {
                 this.page = Page::Queue;
                 this.add_paths(dropped.paths(), cx);
@@ -699,8 +625,7 @@ fn title_bar(
 ) -> impl IntoElement {
     let lang = desktop.lang;
     let pinned = desktop.pinned;
-    let maximized = window.is_maximized();
-    div()
+    let bar = div()
         .h(px(48.))
         .w_full()
         .flex()
@@ -714,6 +639,9 @@ fn title_bar(
                 .flex()
                 .items_center()
                 .px_8()
+                .when(platform::title_inset() > 0., |drag| {
+                    drag.pl(px(platform::title_inset()))
+                })
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
                 .window_control_area(WindowControlArea::Drag)
@@ -721,7 +649,19 @@ fn title_bar(
         )
         .child(language_switch(lang, desktop.lang_anim, cx))
         .child(settings_button(desktop.page == Page::Settings, lang, cx))
-        .child(pin_button(pinned, text(lang, "前置", "Pin"), cx))
+        .child(pin_button(pinned, text(lang, "前置", "Pin"), cx));
+    #[cfg(windows)]
+    let bar = bar.child(window_controls(window.is_maximized(), cx));
+    #[cfg(not(windows))]
+    let _ = window;
+    bar
+}
+
+#[cfg(windows)]
+fn window_controls(maximized: bool, cx: &mut Context<Desktop>) -> impl IntoElement {
+    div()
+        .flex()
+        .h_full()
         .child(chrome_button(
             "window-min",
             ChromeIcon::Minimize,
@@ -740,10 +680,10 @@ fn title_bar(
             false,
             cx.listener(|this, _event, window, cx| {
                 let pinned = this.pinned;
-                toggle_zoom(window);
+                platform::toggle_zoom(window);
                 window.on_next_frame(move |window, _cx| {
                     if pinned {
-                        set_topmost(window, true);
+                        platform::set_topmost(window, true);
                     }
                     window.refresh();
                 });
@@ -925,6 +865,7 @@ fn pin_button(pinned: bool, label: &'static str, cx: &mut Context<Desktop>) -> i
         .child(label)
 }
 
+#[cfg(windows)]
 #[derive(Clone, Copy)]
 enum ChromeIcon {
     Minimize,
@@ -933,6 +874,7 @@ enum ChromeIcon {
     Close,
 }
 
+#[cfg(windows)]
 fn chrome_icon(icon: ChromeIcon) -> &'static str {
     match icon {
         ChromeIcon::Minimize => "chrome/minimize.svg",
@@ -942,6 +884,7 @@ fn chrome_icon(icon: ChromeIcon) -> &'static str {
     }
 }
 
+#[cfg(windows)]
 fn chrome_button(
     id: &'static str,
     icon: ChromeIcon,
@@ -1663,21 +1606,7 @@ fn github_button() -> impl IntoElement {
 }
 
 fn open_repo() {
-    let operation: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
-    let file: Vec<u16> = "https://github.com/gaoyia/ffrm"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe {
-        windows_sys::Win32::UI::Shell::ShellExecuteW(
-            std::ptr::null_mut(),
-            operation.as_ptr(),
-            file.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-        );
-    }
+    platform::open_url("https://github.com/gaoyia/ffrm");
 }
 
 fn version_status(desktop: &Desktop, cx: &mut Context<Desktop>) -> gpui::AnyElement {
@@ -1814,12 +1743,8 @@ fn context_menu_section(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl In
                 .child(note.text.clone()),
         );
     }
-    if desktop.win11 {
-        card = card.child(div().text_xs().text_color(rgb(STONE)).child(text(
-            lang,
-            "Windows 11 要在右键菜单里点「显示更多选项」。",
-            "On Windows 11, choose Show more options.",
-        )));
+    if let Some(hint) = menu::extra_hint(lang) {
+        card = card.child(div().text_xs().text_color(rgb(STONE)).child(hint));
     }
     div()
         .flex()
@@ -1991,21 +1916,14 @@ pub fn run(initial: Vec<PathBuf>) {
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some(window_title(lang).into()),
-                        appears_transparent: true,
-                        ..Default::default()
-                    }),
+                    titlebar: Some(platform::titlebar(window_title(lang))),
                     window_min_size: Some(size(px(1120.), px(630.))),
                     ..Default::default()
                 },
                 move |window, cx| {
                     let pinned = config.pinned;
                     window.on_next_frame(move |window, _cx| {
-                        apply_window_icon(window);
-                        if pinned {
-                            set_topmost(window, true);
-                        }
+                        platform::prepare_window(window, pinned);
                     });
                     cx.new(move |cx| {
                         let mut desktop = Desktop::from_config(

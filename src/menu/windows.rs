@@ -71,6 +71,17 @@ pub fn remove(lang: Lang) -> Result<(), String> {
     Ok(())
 }
 
+pub fn extra_hint(lang: Lang) -> Option<&'static str> {
+    if windows_11() {
+        Some(match lang {
+            Lang::Zh => "Windows 11 要在右键菜单里点「显示更多选项」。",
+            Lang::En => "On Windows 11, choose Show more options.",
+        })
+    } else {
+        None
+    }
+}
+
 pub fn windows_11() -> bool {
     let Ok(key) = open_key(
         HKEY_LOCAL_MACHINE,

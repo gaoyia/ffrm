@@ -20,11 +20,16 @@ fn main() {
 }
 
 fn embed_icon(manifest: &Path) {
-    if env::var("CARGO_CFG_TARGET_OS").ok().as_deref() != Some("windows") {
+    #[cfg(not(windows))]
+    {
+        let _ = manifest;
         return;
     }
-    let icon = manifest.join("assets").join("ffrm.ico");
-    let mut resource = winresource::WindowsResource::new();
-    resource.set_icon(icon.to_str().expect("图标路径"));
-    resource.compile().expect("无法嵌入应用图标");
+    #[cfg(windows)]
+    {
+        let icon = manifest.join("assets").join("ffrm.ico");
+        let mut resource = winresource::WindowsResource::new();
+        resource.set_icon(icon.to_str().expect("图标路径"));
+        resource.compile().expect("无法嵌入应用图标");
+    }
 }

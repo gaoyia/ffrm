@@ -2,6 +2,8 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf, Prefix};
 
+use super::{critical_block, Inspection, Locker};
+
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_MORE_DATA, ERROR_SHARING_VIOLATION,
     ERROR_SUCCESS, INVALID_HANDLE_VALUE,
@@ -29,22 +31,6 @@ use windows_sys::Win32::System::Threading::{
 
 const DELETE_ACCESS: u32 = 0x0001_0000;
 const RM_CRITICAL: u32 = 1000;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Locker {
-    pub pid: u32,
-    pub app_name: String,
-    pub image: Option<String>,
-    pub app_type: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Inspection {
-    pub path: PathBuf,
-    pub lockers: Vec<Locker>,
-    pub sharing_violation: bool,
-    pub list_denied: bool,
-}
 
 pub fn inspect(path: &Path) -> Result<Inspection, String> {
     let path = normalize_existing(path)?;
@@ -170,37 +156,6 @@ pub fn is_critical(locker: &Locker) -> bool {
         names.push(locker.app_name.to_ascii_lowercase());
     }
     names.iter().any(|name| NAMES.contains(&name.as_str()))
-}
-
-pub fn critical_block(lockers: &[Locker]) -> Option<String> {
-    let critical: Vec<_> = lockers
-        .iter()
-        .filter(|locker| is_critical(locker))
-        .collect();
-    if critical.is_empty() {
-        return None;
-    }
-    let listed = critical
-        .iter()
-        .map(|locker| format!("pid {} {}", locker.pid, display_name(locker)))
-        .collect::<Vec<_>>()
-        .join("，");
-    Some(format!("占用者包含关键系统进程，已拒绝解除占用: {listed}"))
-}
-
-pub fn display_name(locker: &Locker) -> String {
-    if !locker.app_name.is_empty() {
-        return locker.app_name.clone();
-    }
-    locker
-        .image
-        .as_deref()
-        .and_then(|image| {
-            Path::new(image)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "未知程序".to_string())
 }
 
 fn normalize_existing(path: &Path) -> Result<PathBuf, String> {

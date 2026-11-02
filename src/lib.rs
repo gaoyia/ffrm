@@ -46,7 +46,7 @@ const HELP_TAIL: &str = "
   -V, --version  显示版本
 
 直接传入路径只会打开窗口并加入队列，不会删除。
-不会删除磁盘根目录、Windows 目录、用户主目录或 Program Files 本身。
+{protected}
 unlock 会关闭正在使用该文件的程序。程序若没有退出，会结束该进程。关键系统进程会被拒绝。
 目录仍被占用但没有列出进程时，会再查找当前目录正好是该文件夹的进程。
 ";
@@ -186,7 +186,22 @@ fn lines_err(lines: Vec<String>, error: String) -> Report {
 }
 
 pub fn help_text() -> String {
-    format!("{}{HELP_TAIL}", help_body())
+    format!("{}{HELP_TAIL}", help_body()).replace("{protected}", protected_note())
+}
+
+fn protected_note() -> &'static str {
+    #[cfg(windows)]
+    {
+        "不会删除磁盘根目录、Windows 目录、用户主目录或 Program Files 本身。"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "不会删除磁盘根目录、系统目录或用户主目录本身。"
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        ""
+    }
 }
 
 fn parse_action(text: &str) -> Result<Action, String> {
@@ -405,6 +420,7 @@ fn emit(line: &str) {
 }
 
 fn emit_raw_err(text: &str) -> Result<(), String> {
+    #[cfg(windows)]
     if write_console(&io::stderr(), text) {
         return Ok(());
     }
@@ -419,7 +435,8 @@ pub fn emit_err(line: &str) {
     let _ = write_line(io::stderr(), line);
 }
 
-fn write_line<T>(target: T, line: &str) -> io::Result<()>
+#[cfg(windows)]
+fn write_line<T>(mut target: T, line: &str) -> io::Result<()>
 where
     T: Write + std::os::windows::io::AsRawHandle,
 {
@@ -428,11 +445,19 @@ where
     if write_console(&target, &text) {
         return Ok(());
     }
-    let mut target = target;
     target.write_all(text.as_bytes())?;
     target.flush()
 }
 
+#[cfg(not(windows))]
+fn write_line(mut target: impl Write, line: &str) -> io::Result<()> {
+    let mut text = String::from(line);
+    text.push('\n');
+    target.write_all(text.as_bytes())?;
+    target.flush()
+}
+
+#[cfg(windows)]
 fn write_console(target: &impl std::os::windows::io::AsRawHandle, text: &str) -> bool {
     use windows_sys::Win32::System::Console::WriteConsoleW;
 
@@ -491,6 +516,7 @@ mod tests {
         assert!(parse_args(["status"]).is_err());
     }
 
+    #[cfg(windows)]
     #[test]
     fn deletes_a_directory_held_only_as_a_current_directory() {
         let dir = std::env::temp_dir().join(format!("ffrm-cwd-delete-{}", std::process::id()));
@@ -498,6 +524,34 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut child = std::process::Command::new("cmd")
             .args(["/c", "ping -n 60 127.0.0.1 > nul"])
+            .current_dir(&dir)
+            .spawn()
+            .unwrap();
+        let result = execute(&Command {
+            action: Action::Delete,
+            paths: vec![dir.clone()],
+            unlock: true,
+            force: true,
+            yes: true,
+            recursive: false,
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        result.unwrap();
+        assert!(!dir.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn deletes_a_directory_held_only_as_a_current_directory() {
+        let dir = std::env::temp_dir().join(format!("ffrm-cwd-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
             .current_dir(&dir)
             .spawn()
             .unwrap();

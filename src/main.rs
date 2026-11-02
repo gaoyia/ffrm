@@ -2,18 +2,18 @@ mod config;
 mod gui;
 mod mcp;
 mod menu;
+mod platform;
 mod update;
 
 use std::process::ExitCode;
-
-use windows_sys::Win32::System::Console::FreeConsole;
 
 fn launch_window(args: &[std::ffi::OsString]) -> bool {
     match args.first() {
         None => true,
         Some(arg) => {
             let text = arg.to_string_lossy();
-            !text.starts_with('-') && !matches!(text.as_ref(), "status" | "unlock" | "delete" | "mcp")
+            !text.starts_with('-')
+                && !matches!(text.as_ref(), "status" | "unlock" | "delete" | "mcp")
         }
     }
 }
@@ -29,7 +29,7 @@ fn main() -> ExitCode {
     }
     if launch_window(&args) {
         let paths = args.into_iter().map(std::path::PathBuf::from).collect();
-        unsafe { FreeConsole() };
+        detach_console();
         gui::run(paths);
         return ExitCode::SUCCESS;
     }
@@ -59,6 +59,15 @@ fn main() -> ExitCode {
         },
     }
 }
+
+#[cfg(windows)]
+fn detach_console() {
+    use windows_sys::Win32::System::Console::FreeConsole;
+    unsafe { FreeConsole() };
+}
+
+#[cfg(not(windows))]
+fn detach_console() {}
 
 #[cfg(test)]
 mod tests {

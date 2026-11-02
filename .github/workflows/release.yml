@@ -16,9 +16,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
+      - name: 安装 Inno Setup
+        run: winget install --id JRSoftware.InnoSetup --exact --accept-package-agreements --accept-source-agreements --disable-interactivity
+      - name: 生成 exe 安装包
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\windows\ffrm.iss
       - uses: softprops/action-gh-release@v2
         with:
           files: |
+            target/release/ffrm-setup.exe
             target/release/ffrm.exe
             target/release/LICENSE
           generate_release_notes: true
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: 生成 dmg
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          chmod +x packaging/macos/make-dmg.sh
+          packaging/macos/make-dmg.sh target/release/ffrm "$version" target/release/ffrm.dmg
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/ffrm.dmg
+            target/release/ffrm

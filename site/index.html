@@ -6,7 +6,7 @@
     <title>ffrm · 文件强制解锁删除工具</title>
     <meta
       name="description"
-      content="查看谁占用了本地文件或文件夹，解除占用，然后删除。仅支持 Windows。"
+      content="查看谁占用了本地文件或文件夹，解除占用，然后删除。支持 Windows 和 macOS。"
     />
     <link rel="icon" href="icon.png" />
     <style>
@@ -195,6 +195,7 @@
         <p class="lead" id="lead">查看谁占用了本地文件或文件夹，解除占用，然后删除。</p>
         <div class="actions">
           <a class="download" id="download" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">正在查找安装包</a>
+          <a class="download" id="download-mac" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">正在查找安装包</a>
           <a class="repo" id="repo" href="https://github.com/gaoyia/ffrm">GitHub</a>
         </div>
         <p class="meta" id="meta"></p>
@@ -221,8 +222,10 @@
           notes: [
             "程序文件很小，下载后可以直接运行。",
             "支持加到右键菜单，用来删除文件或文件夹。",
-            "目前仅支持 Windows。"
+            "Windows 安装包是 ffrm-setup.exe，macOS 安装包是 ffrm.dmg。"
           ],
+          mac: "下载 macOS 版",
+          macArch: "macOS Apple 芯片",
           latest: "最新版本",
           windows: "Windows x64"
         },
@@ -240,8 +243,10 @@
           notes: [
             "The program is a small file, and you can run it right after downloading.",
             "It can be added to the right-click menu to delete files or folders.",
-            "It currently only supports Windows."
+            "The Windows installer is ffrm-setup.exe. The macOS installer is ffrm.dmg."
           ],
+          mac: "Download for macOS",
+          macArch: "macOS Apple silicon",
           latest: "Latest",
           windows: "Windows x64"
         }
@@ -256,6 +261,7 @@
       const title = document.getElementById("title");
       const lead = document.getElementById("lead");
       const download = document.getElementById("download");
+      const downloadMac = document.getElementById("download-mac");
       const meta = document.getElementById("meta");
       const install = document.getElementById("install");
       const notes = document.getElementById("notes");
@@ -268,8 +274,33 @@
 
       function asset() {
         if (!release || !release.assets) return null;
-        return release.assets.find((item) => item.name === "ffrm.exe")
-          || release.assets.find((item) => item.name.toLowerCase().endsWith(".exe"));
+        return release.assets.find((item) => item.name === "ffrm-setup.exe")
+          || release.assets.find((item) => item.name === "ffrm.exe");
+      }
+
+      function macAsset() {
+        if (!release || !release.assets) return null;
+        return release.assets.find((item) => item.name === "ffrm.dmg")
+          || release.assets.find((item) => item.name === "ffrm");
+      }
+
+      function showDownload(link, label, file) {
+        const t = text();
+        if (!loaded) {
+          link.textContent = t.finding;
+          link.href = releases;
+          link.setAttribute("aria-disabled", "true");
+          return;
+        }
+        if (!file) {
+          link.textContent = t.missing;
+          link.href = releases;
+          link.removeAttribute("aria-disabled");
+          return;
+        }
+        link.textContent = label;
+        link.href = file.browser_download_url;
+        link.removeAttribute("aria-disabled");
       }
 
       function sizeLabel(bytes) {
@@ -299,26 +330,18 @@
           notes.append(item);
         }
         const file = asset();
-        if (!loaded) {
-          download.textContent = t.finding;
-          download.href = releases;
-          download.setAttribute("aria-disabled", "true");
+        const mac = macAsset();
+        showDownload(download, t.download, file);
+        showDownload(downloadMac, t.mac, mac);
+        if (!loaded || (!file && !mac)) {
           meta.textContent = "";
           return;
         }
-        if (!file) {
-          download.textContent = t.missing;
-          download.href = releases;
-          download.removeAttribute("aria-disabled");
-          meta.textContent = "";
-          return;
-        }
-        download.textContent = t.download;
-        download.href = file.browser_download_url;
-        download.removeAttribute("aria-disabled");
         const version = (release.tag_name || "").replace(/^v/, "");
-        const size = sizeLabel(file.size);
-        meta.textContent = [t.latest + " " + version, t.windows, size].filter(Boolean).join(" · ");
+        const parts = [t.latest + " " + version];
+        if (file) parts.push(t.windows, sizeLabel(file.size));
+        if (mac) parts.push(t.macArch, sizeLabel(mac.size));
+        meta.textContent = parts.filter(Boolean).join(" · ");
       }
 
       zh.addEventListener("click", () => { lang = "zh"; render(); });

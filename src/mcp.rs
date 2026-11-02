@@ -30,13 +30,19 @@ pub fn reply(message: &str) -> Option<String> {
     let value: Value = match serde_json::from_str(message) {
         Ok(value) => value,
         Err(_) => {
-            return Some(respond(Value::Null, Err((-32700, "无法解析 JSON".to_string()))));
+            return Some(respond(
+                Value::Null,
+                Err((-32700, "无法解析 JSON".to_string())),
+            ));
         }
     };
     let Some(id) = value.get("id").filter(|id| !id.is_null()).cloned() else {
         return None;
     };
-    let method = value.get("method").and_then(|item| item.as_str()).unwrap_or("");
+    let method = value
+        .get("method")
+        .and_then(|item| item.as_str())
+        .unwrap_or("");
     let params = value.get("params").cloned().unwrap_or_else(|| json!({}));
     Some(respond(id, dispatch(method, &params)))
 }
@@ -119,8 +125,14 @@ fn tools() -> Value {
 }
 
 fn call_tool(params: &Value) -> Value {
-    let name = params.get("name").and_then(|item| item.as_str()).unwrap_or("");
-    let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let name = params
+        .get("name")
+        .and_then(|item| item.as_str())
+        .unwrap_or("");
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     if !arguments.is_object() {
         return tool_error("arguments 必须是对象。".to_string());
     }
@@ -128,7 +140,9 @@ fn call_tool(params: &Value) -> Value {
         "status" => status_tool(&arguments),
         "unlock" => unlock_tool(&arguments),
         "delete" => delete_tool(&arguments),
-        _ => tool_error(format!("未知工具: {name}。可用的工具是 status、unlock、delete。")),
+        _ => tool_error(format!(
+            "未知工具: {name}。可用的工具是 status、unlock、delete。"
+        )),
     }
 }
 
@@ -271,10 +285,7 @@ fn read_message(reader: &mut impl BufRead) -> io::Result<Option<Incoming>> {
         loop {
             line.clear();
             if reader.read_line(&mut line)? == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "缺少消息正文",
-                ));
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "缺少消息正文"));
             }
             if line.trim().is_empty() {
                 break;
@@ -330,8 +341,14 @@ mod tests {
         .unwrap();
         let parsed: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["id"].as_i64(), Some(7));
-        assert_eq!(parsed["result"]["serverInfo"]["name"].as_str(), Some("ffrm"));
-        assert_eq!(parsed["result"]["protocolVersion"].as_str(), Some("2024-11-05"));
+        assert_eq!(
+            parsed["result"]["serverInfo"]["name"].as_str(),
+            Some("ffrm")
+        );
+        assert_eq!(
+            parsed["result"]["protocolVersion"].as_str(),
+            Some("2024-11-05")
+        );
     }
 
     #[test]
