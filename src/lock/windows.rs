@@ -10,7 +10,8 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, GetFileAttributesW, GetLongPathNameW, RemoveDirectoryW, SetFileAttributesW,
-    FILE_ATTRIBUTE_READONLY, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::{
@@ -585,21 +586,29 @@ fn remove_directory(path: &Path, recursive: bool) -> Result<(), String> {
 }
 
 fn remove_link(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|err| format!("无法读取 {}: {err}", path.display()))?;
-    if metadata.file_type().is_symlink() && !metadata.is_dir() {
-        std::fs::remove_file(path).map_err(|err| format!("删除 {} 失败: {err}", path.display()))?;
-        return Ok(());
-    }
     let wide = wide_path(path);
-    let ok = unsafe { RemoveDirectoryW(wide.as_ptr()) };
-    if ok == 0 {
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
         return Err(format!(
-            "删除链接 {} 失败: {}",
+            "无法读取 {}: {}",
             path.display(),
             win_message(unsafe { GetLastError() })
         ));
     }
+    // 当前 Rust 把目录联接报成符号链接，而且 is_dir() 为 false。
+    // 带目录属性的重解析点必须用 RemoveDirectoryW，DeleteFile 会拒绝访问。
+    if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        let ok = unsafe { RemoveDirectoryW(wide.as_ptr()) };
+        if ok == 0 {
+            return Err(format!(
+                "删除链接 {} 失败: {}",
+                path.display(),
+                win_message(unsafe { GetLastError() })
+            ));
+        }
+        return Ok(());
+    }
+    std::fs::remove_file(path).map_err(|err| format!("删除 {} 失败: {err}", path.display()))?;
     Ok(())
 }
 
@@ -786,6 +795,32 @@ mod tests {
         assert!(child.exists());
         delete_path(&dir, true).unwrap();
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn removes_a_directory_junction_without_deleting_the_target() {
+        let root = std::env::temp_dir().join(format!("ffrm-junction-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let target = root.join("target");
+        let link = root.join("link");
+        let keep = target.join("keep.txt");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(&keep, b"keep").unwrap();
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/c",
+                "mklink",
+                "/J",
+                &link.display().to_string(),
+                &target.display().to_string(),
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success(), "无法创建目录联接");
+        delete_path(&link, true).unwrap();
+        assert!(!link.exists());
+        assert!(keep.exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
