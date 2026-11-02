@@ -407,8 +407,10 @@ fn clear_tree(path: &Path) {
 fn clear_user_flags(path: &Path) {
     let mut bytes = path.as_os_str().as_bytes().to_vec();
     bytes.push(0);
+    // chflags 会穿过符号链接，把目标的标志清掉。
+    // 删除时只能动这个路径本身，所以用 lchflags。
     unsafe {
-        chflags(bytes.as_ptr().cast(), 0);
+        lchflags(bytes.as_ptr().cast(), 0);
     }
 }
 
@@ -467,7 +469,7 @@ extern "C" {
 
 extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
-    fn chflags(path: *const i8, flags: u32) -> i32;
+    fn lchflags(path: *const i8, flags: u32) -> i32;
 }
 
 #[cfg(test)]
@@ -567,5 +569,110 @@ mod tests {
             app_type: 0,
         };
         assert!(is_critical(&window_server));
+    }
+
+    const UF_IMMUTABLE: u32 = 0x2;
+    const UF_HIDDEN: u32 = 0x8000;
+
+    fn set_flags(path: &Path, flags: u32) {
+        let mut bytes = path.as_os_str().as_bytes().to_vec();
+        bytes.push(0);
+        let rc = unsafe { lchflags(bytes.as_ptr().cast(), flags) };
+        assert_eq!(rc, 0, "无法设置 {}", path.display());
+    }
+
+    fn flags_of(path: &Path) -> u32 {
+        use std::os::macos::fs::MetadataExt;
+        std::fs::symlink_metadata(path).unwrap().st_flags()
+    }
+
+    struct TempRoot(PathBuf);
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            fn clear(path: &Path) {
+                let mut bytes = path.as_os_str().as_bytes().to_vec();
+                bytes.push(0);
+                unsafe {
+                    lchflags(bytes.as_ptr().cast(), 0);
+                }
+                let Ok(metadata) = std::fs::symlink_metadata(path) else {
+                    return;
+                };
+                if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                    if let Ok(entries) = std::fs::read_dir(path) {
+                        for entry in entries.flatten() {
+                            clear(&entry.path());
+                        }
+                    }
+                }
+            }
+            clear(&self.0);
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn removes_a_directory_symlink_without_deleting_the_target() {
+        let root =
+            TempRoot(std::env::temp_dir().join(format!("ffrm-symlink-{}", std::process::id())));
+        let target = root.0.join("target");
+        let link = root.0.join("link");
+        let keep = target.join("keep.txt");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(&keep, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        delete_path(&link, true).unwrap();
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert!(keep.exists());
+    }
+
+    #[test]
+    fn deleting_a_symlink_keeps_the_target_flags() {
+        let root =
+            TempRoot(std::env::temp_dir().join(format!("ffrm-flags-{}", std::process::id())));
+        let target = root.0.join("target");
+        let link = root.0.join("link");
+        std::fs::create_dir_all(&root.0).unwrap();
+        std::fs::write(&target, b"keep").unwrap();
+        set_flags(&target, UF_HIDDEN);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        delete_path(&link, false).unwrap();
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert_eq!(flags_of(&target) & UF_HIDDEN, UF_HIDDEN);
+        assert!(target.exists());
+    }
+
+    #[test]
+    fn deletes_an_immutable_symlink_without_touching_the_target() {
+        let root = TempRoot(std::env::temp_dir().join(format!("ffrm-uchg-{}", std::process::id())));
+        let target = root.0.join("target");
+        let link = root.0.join("link");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.txt"), b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        set_flags(&link, UF_IMMUTABLE);
+        delete_path(&link, true).unwrap();
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert!(target.join("keep.txt").exists());
+    }
+
+    #[test]
+    fn recursive_delete_unlinks_a_nested_directory_symlink() {
+        let root =
+            TempRoot(std::env::temp_dir().join(format!("ffrm-nested-link-{}", std::process::id())));
+        let parent = root.0.join("parent");
+        let outside = root.0.join("outside");
+        let link = parent.join("link");
+        let keep = outside.join("keep.txt");
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(&keep, b"keep").unwrap();
+        set_flags(&keep, UF_HIDDEN);
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        delete_path(&parent, true).unwrap();
+        assert!(!parent.exists());
+        assert_eq!(flags_of(&keep) & UF_HIDDEN, UF_HIDDEN);
+        assert!(keep.exists());
     }
 }

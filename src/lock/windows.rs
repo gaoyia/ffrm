@@ -11,8 +11,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, GetFileAttributesW, GetLongPathNameW, RemoveDirectoryW, SetFileAttributesW,
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::{
     FormatMessageW, ReadProcessMemory, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
