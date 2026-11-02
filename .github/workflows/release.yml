@@ -17,12 +17,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
       - name: 安装 Inno Setup
-        run: winget install --id JRSoftware.InnoSetup --exact --accept-package-agreements --accept-source-agreements --disable-interactivity
+        run: winget install --id JRSoftware.InnoSetup.7 --version 7.1.1 --exact --accept-package-agreements --accept-source-agreements --disable-interactivity
       - name: 生成 exe 安装包
         shell: pwsh
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\windows\ffrm.iss
+          & "${env:ProgramFiles}\Inno Setup 7\ISCC.exe" "/DMyAppVersion=$version" packaging\windows\ffrm.iss
       - uses: softprops/action-gh-release@v2
         with:
           files: |
