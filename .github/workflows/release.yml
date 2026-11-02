@@ -31,10 +31,13 @@ jobs:
             throw "找不到 ISCC.exe。已检查：$($candidates -join '，')"
           }
           & $iscc "/DMyAppVersion=$version" packaging\windows\ffrm.iss
+          Copy-Item target\release\ffrm.exe target\release\ffrm-x64.exe
+          Copy-Item target\release\ffrm-setup.exe target\release\ffrm-setup-x64.exe
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/release/ffrm-setup.exe
+            target/release/ffrm-x64.exe
+            target/release/ffrm-setup-x64.exe
             target/release/ffrm.exe
             target/release/LICENSE
           generate_release_notes: true
@@ -50,9 +53,11 @@ jobs:
         run: |
           version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
           chmod +x packaging/macos/make-dmg.sh
-          packaging/macos/make-dmg.sh target/release/ffrm "$version" target/release/ffrm.dmg
+          packaging/macos/make-dmg.sh target/release/ffrm "$version" target/release/ffrm-arm64.dmg
+          cp target/release/ffrm target/release/ffrm-arm64
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/release/ffrm.dmg
+            target/release/ffrm-arm64.dmg
+            target/release/ffrm-arm64
             target/release/ffrm

@@ -82,7 +82,7 @@ fn fetch_tag() -> Result<String, FetchError> {
 }
 
 fn release_binary(tag: &str) -> String {
-    format!("https://github.com/gaoyia/ffrm/releases/download/{tag}/ffrm")
+    format!("https://github.com/gaoyia/ffrm/releases/download/{tag}/ffrm-arm64")
 }
 
 fn release_tag(location: &str) -> Result<String, FetchError> {
@@ -261,7 +261,7 @@ mod tests {
         assert_eq!(release_tag(location).unwrap(), "v0.2.0");
         assert_eq!(
             release_binary("v0.2.0"),
-            "https://github.com/gaoyia/ffrm/releases/download/v0.2.0/ffrm"
+            "https://github.com/gaoyia/ffrm/releases/download/v0.2.0/ffrm-arm64"
         );
     }
 }
