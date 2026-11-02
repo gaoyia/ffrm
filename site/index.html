@@ -102,36 +102,88 @@
         font-size: 16px;
         line-height: 1.6;
       }
-      .actions {
+      .downloads {
         display: flex;
-        flex-wrap: wrap;
+        flex-direction: column;
         gap: 12px;
+        width: 100%;
         margin-top: 8px;
       }
-      .download, .repo {
-        display: inline-flex;
-        align-items: center;
-        height: 44px;
-        padding: 0 18px;
-        border-radius: 999px;
-        font-size: 14px;
+      .platform {
+        padding: 16px;
+        border-radius: 24px;
+        background: var(--ink);
+      }
+      .platform h2 {
+        margin: 0 0 12px;
+        color: var(--stone);
+        font-size: 13px;
+        font-weight: 560;
+      }
+      .choices {
+        display: flex;
+        gap: 10px;
+      }
+      .choice, .repo {
         text-decoration: none;
       }
-      .download {
+      .choice {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 4px;
+        min-width: 0;
+        min-height: 68px;
+        padding: 12px 14px;
+        border: 1px solid transparent;
+        border-radius: 16px;
+      }
+      .choice .kind {
+        font-size: 14px;
+        line-height: 1.2;
+      }
+      .choice .file {
+        overflow: hidden;
+        font-size: 12px;
+        line-height: 1.4;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .choice.primary {
         background: var(--cream);
         color: var(--canvas);
       }
-      .download[aria-disabled="true"] {
-        background: var(--ink);
+      .choice.primary .file { color: #5c5348; }
+      .choice.secondary {
+        border-color: var(--line);
+        color: var(--cream);
+      }
+      .choice.secondary .file { color: var(--stone); }
+      .choice.primary:hover { background: #fffaf3; }
+      .choice.secondary:hover { border-color: var(--brass); }
+      .choice[aria-disabled="true"] {
+        background: transparent;
+        border-color: var(--line);
         color: var(--stone);
         pointer-events: none;
       }
+      .choice[aria-disabled="true"] .file { color: var(--stone); }
+      .actions { margin-top: 4px; }
       .repo {
+        display: inline-flex;
+        align-items: center;
+        height: 36px;
+        padding: 0 14px;
         border: 1px solid var(--line);
+        border-radius: 999px;
         color: var(--cream);
+        font-size: 13px;
       }
-      .download:hover { background: #fffaf3; }
       .repo:hover { border-color: var(--brass); }
+      @media (max-width: 560px) {
+        .choices { flex-direction: column; }
+      }
       .meta {
         min-height: 20px;
         margin: 0;
@@ -165,12 +217,56 @@
         line-height: 1.5;
       }
       .notes li:last-child { border-bottom: 0; }
+      .donate {
+        margin-top: 36px;
+      }
+      .donate h2 {
+        margin: 0 0 12px;
+        font-size: 16px;
+        font-weight: 560;
+      }
+      .donate p {
+        margin: 0 0 12px;
+        color: var(--stone);
+        font-size: 14px;
+        line-height: 1.7;
+      }
+      .donate strong {
+        color: var(--cream);
+        font-weight: 560;
+      }
+      .codes {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin: 16px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .codes figure { margin: 0; }
+      .codes img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 12px;
+        background: #fff;
+      }
+      .codes figcaption {
+        margin-top: 8px;
+        color: var(--stone);
+        font-size: 12px;
+        line-height: 1.4;
+        text-align: center;
+      }
       footer {
         margin-top: 28px;
         color: var(--stone);
         font-size: 13px;
       }
       footer a { color: var(--brass); }
+      @media (max-width: 560px) {
+        .codes { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
@@ -193,14 +289,65 @@
         <img src="icon.png" width="96" height="96" alt="" />
         <h1 id="title">文件强制解锁删除工具</h1>
         <p class="lead" id="lead">查看谁占用了本地文件或文件夹，解除占用，然后删除。</p>
-        <div class="actions">
-          <a class="download" id="download" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">正在查找安装包</a>
-          <a class="download" id="download-mac" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">正在查找安装包</a>
-          <a class="repo" id="repo" href="https://github.com/gaoyia/ffrm">GitHub</a>
+        <div class="downloads">
+          <section class="platform" id="platform-windows">
+            <h2 id="label-windows">Windows</h2>
+            <div class="choices">
+              <a class="choice primary" id="win-setup" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">
+                <span class="kind">安装包</span>
+                <span class="file">正在查找</span>
+              </a>
+              <a class="choice secondary" id="win-portable" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">
+                <span class="kind">绿色版</span>
+                <span class="file">正在查找</span>
+              </a>
+            </div>
+          </section>
+          <section class="platform" id="platform-mac">
+            <h2 id="label-mac">macOS</h2>
+            <div class="choices">
+              <a class="choice primary" id="mac-setup" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">
+                <span class="kind">安装包</span>
+                <span class="file">正在查找</span>
+              </a>
+              <a class="choice secondary" id="mac-portable" href="https://github.com/gaoyia/ffrm/releases/latest" aria-disabled="true">
+                <span class="kind">绿色版</span>
+                <span class="file">正在查找</span>
+              </a>
+            </div>
+          </section>
         </div>
         <p class="meta" id="meta"></p>
+        <div class="actions">
+          <a class="repo" id="repo" href="https://github.com/gaoyia/ffrm">GitHub</a>
+        </div>
         <p class="install" id="install"></p>
         <ul class="notes" id="notes"></ul>
+      </section>
+      <section class="donate">
+        <h2>捐赠</h2>
+        <p><strong>强烈谴责A股市场环境</strong>：作者因买入股【华铁股份】现【R通达1】不完全统计<strong>家庭总计亏损高达200万</strong>。目前正在起诉，进入二审阶段，执行更是不知要到什么时候了，这已经是第三、四年了，其余股票也亏损严重，现金流状况至今难以缓解。</p>
+        <p>故在此赛博要饭接受捐赠，谢谢。</p>
+        <ul class="codes">
+          <li>
+            <figure>
+              <img src="https://cdn.jsdelivr.net/gh/gaoyia/gaoyia@v0.0.2/donate.jpg" alt="微信赞赏码" />
+              <figcaption>微信赞赏码</figcaption>
+            </figure>
+          </li>
+          <li>
+            <figure>
+              <img src="https://cdn.jsdelivr.net/gh/gaoyia/gaoyia@v0.0.2/zfbhb.jpg" alt="支付宝领红包" />
+              <figcaption>支付宝领红包</figcaption>
+            </figure>
+          </li>
+          <li>
+            <figure>
+              <img src="https://cdn.jsdelivr.net/gh/gaoyia/gaoyia@v0.0.2/zfb.jpg" alt="支付宝" />
+              <figcaption>支付宝</figcaption>
+            </figure>
+          </li>
+        </ul>
       </section>
       <footer>
         <a id="license" href="https://github.com/gaoyia/ffrm/blob/main/LICENSE">MIT</a>
@@ -213,42 +360,44 @@
           title: "文件强制解锁删除工具",
           document: "ffrm · 文件强制解锁删除工具",
           lead: "查看谁占用了本地文件或文件夹，解除占用，然后删除。",
-          finding: "正在查找安装包",
-          download: "下载 Windows 版",
-          missing: "还没有可下载的安装包",
+          finding: "正在查找",
+          setup: "安装包",
+          portable: "绿色版",
+          missing: "尚未发布",
+          unavailable: "打开发布页",
           install: "已经安装 Rust 时，可以执行 ",
           installEnd: "。",
           repo: "GitHub",
           notes: [
-            "程序文件很小，下载后可以直接运行。",
+            "安装包装到当前用户目录。绿色版不用安装，下载后可以直接运行。",
             "支持加到右键菜单，用来删除文件或文件夹。",
-            "Windows 安装包是 ffrm-setup.exe，macOS 安装包是 ffrm.dmg。"
+            "macOS 安装包打开后，把 ffrm.app 拖进「应用程序」。目前只提供 Apple 芯片版本。"
           ],
-          mac: "下载 macOS 版",
-          macArch: "macOS Apple 芯片",
+          macTitle: "macOS · Apple 芯片",
           latest: "最新版本",
-          windows: "Windows x64"
+          windows: "Windows · 64 位"
         },
         en: {
           html: "en",
           title: "Force Unlock and Delete",
           document: "ffrm · Force Unlock and Delete",
           lead: "See which program is using a file or folder, unlock it, then delete it.",
-          finding: "Looking for a download",
-          download: "Download for Windows",
-          missing: "No download has been published",
+          finding: "Looking",
+          setup: "Installer",
+          portable: "Portable",
+          missing: "Not published yet",
+          unavailable: "Open the release page",
           install: "If Rust is already installed, run ",
           installEnd: ".",
           repo: "GitHub",
           notes: [
-            "The program is a small file, and you can run it right after downloading.",
+            "The installer sets the program up for the current user. The portable build runs without installation.",
             "It can be added to the right-click menu to delete files or folders.",
-            "The Windows installer is ffrm-setup.exe. The macOS installer is ffrm.dmg."
+            "Open the macOS installer and drag ffrm.app into Applications. This build is for Apple silicon."
           ],
-          mac: "Download for macOS",
-          macArch: "macOS Apple silicon",
+          macTitle: "macOS · Apple silicon",
           latest: "Latest",
-          windows: "Windows x64"
+          windows: "Windows · 64-bit"
         }
       };
 
@@ -258,48 +407,66 @@
       let release = null;
       let loaded = false;
 
+      const files = {
+        "win-setup": "ffrm-setup.exe",
+        "win-portable": "ffrm.exe",
+        "mac-setup": "ffrm.dmg",
+        "mac-portable": "ffrm"
+      };
+
       const title = document.getElementById("title");
       const lead = document.getElementById("lead");
-      const download = document.getElementById("download");
-      const downloadMac = document.getElementById("download-mac");
       const meta = document.getElementById("meta");
       const install = document.getElementById("install");
       const notes = document.getElementById("notes");
       const zh = document.getElementById("lang-zh");
       const en = document.getElementById("lang-en");
+      const labelWindows = document.getElementById("label-windows");
+      const labelMac = document.getElementById("label-mac");
+
+      if (/Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent)) {
+        const mac = document.getElementById("platform-mac");
+        mac.parentElement.insertBefore(mac, document.getElementById("platform-windows"));
+      }
 
       function text() {
         return copy[lang];
       }
 
-      function asset() {
+      function asset(name) {
         if (!release || !release.assets) return null;
-        return release.assets.find((item) => item.name === "ffrm-setup.exe")
-          || release.assets.find((item) => item.name === "ffrm.exe");
+        return release.assets.find((item) => item.name === name) || null;
       }
 
-      function macAsset() {
-        if (!release || !release.assets) return null;
-        return release.assets.find((item) => item.name === "ffrm.dmg")
-          || release.assets.find((item) => item.name === "ffrm");
-      }
-
-      function showDownload(link, label, file) {
+      function showChoice(id) {
         const t = text();
+        const link = document.getElementById(id);
+        const kind = link.querySelector(".kind");
+        const file = link.querySelector(".file");
+        const name = files[id];
+        kind.textContent = id.endsWith("setup") ? t.setup : t.portable;
         if (!loaded) {
-          link.textContent = t.finding;
+          file.textContent = t.finding;
           link.href = releases;
           link.setAttribute("aria-disabled", "true");
           return;
         }
-        if (!file) {
-          link.textContent = t.missing;
+        if (!release) {
+          file.textContent = t.unavailable;
           link.href = releases;
           link.removeAttribute("aria-disabled");
           return;
         }
-        link.textContent = label;
-        link.href = file.browser_download_url;
+        const found = asset(name);
+        if (!found) {
+          file.textContent = name + " · " + t.missing;
+          link.href = releases;
+          link.removeAttribute("aria-disabled");
+          return;
+        }
+        const size = sizeLabel(found.size);
+        file.textContent = size ? name + " · " + size : name;
+        link.href = found.browser_download_url;
         link.removeAttribute("aria-disabled");
       }
 
@@ -323,25 +490,21 @@
         command.textContent = "cargo install ffrm";
         install.append(command);
         install.append(document.createTextNode(t.installEnd));
+        labelWindows.textContent = t.windows;
+        labelMac.textContent = t.macTitle;
         notes.replaceChildren();
         for (const line of t.notes) {
           const item = document.createElement("li");
           item.textContent = line;
           notes.append(item);
         }
-        const file = asset();
-        const mac = macAsset();
-        showDownload(download, t.download, file);
-        showDownload(downloadMac, t.mac, mac);
-        if (!loaded || (!file && !mac)) {
+        for (const id of Object.keys(files)) showChoice(id);
+        if (!loaded || !release) {
           meta.textContent = "";
           return;
         }
         const version = (release.tag_name || "").replace(/^v/, "");
-        const parts = [t.latest + " " + version];
-        if (file) parts.push(t.windows, sizeLabel(file.size));
-        if (mac) parts.push(t.macArch, sizeLabel(mac.size));
-        meta.textContent = parts.filter(Boolean).join(" · ");
+        meta.textContent = t.latest + " " + version;
       }
 
       zh.addEventListener("click", () => { lang = "zh"; render(); });
