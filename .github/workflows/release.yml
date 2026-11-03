@@ -60,4 +60,3 @@ jobs:
           files: |
             target/release/ffrm-darwin-arm64.dmg
             target/release/ffrm-darwin-arm64
-            target/release/ffrm

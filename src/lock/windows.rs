@@ -36,8 +36,8 @@ pub fn inspect(path: &Path) -> Result<Inspection, String> {
     let path = normalize_existing(path)?;
     let (mut lockers, list_denied) = query_lockers(&path)?;
     let sharing_violation = is_sharing_violation(&path);
-    // Restart Manager misses a process that only has this directory as its current directory.
-    if sharing_violation && lockers.is_empty() {
+    // Restart Manager 列不出只把目录当作当前目录的进程，而这种占用也不一定表现为共享冲突。
+    if lockers.is_empty() && path.is_dir() {
         lockers = current_directory_lockers(&path);
     }
     Ok(Inspection {
@@ -885,7 +885,6 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         let _ = fs::remove_dir_all(&dir);
-        assert!(inspection.sharing_violation);
         assert!(
             found,
             "expected pid {} among {:?}",

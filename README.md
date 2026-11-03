@@ -12,7 +12,7 @@ Windows 和 macOS 工具。查看谁占用了本地文件或文件夹，解除�
 
 ## 下载
 
-安装包发布在 [GitHub Releases](https://github.com/gaoyia/ffrm/releases)。下载页是 [gaoyia.github.io/ffrm](https://gaoyia.github.io/ffrm/)。Windows 安装包是 `ffrm-win-x64-setup.exe`，装到当前用户目录。macOS 安装包是 `ffrm-darwin-arm64.dmg`，面向 Apple 芯片，打开后把 `ffrm.app` 拖进「应用程序」。绿色版仍然发布：Windows 是 `ffrm-win-x64.exe`，macOS 是 `ffrm-darwin-arm64`。发布里同时保留旧文件名 `ffrm.exe` 和 `ffrm`，已经安装的程序仍能从这里更新。程序内更新替换的是正在运行的程序文件，不下载安装包。
+安装包发布在 [GitHub Releases](https://github.com/gaoyia/ffrm/releases)。下载页是 [gaoyia.github.io/ffrm](https://gaoyia.github.io/ffrm/)。Windows 安装包是 `ffrm-win-x64-setup.exe`，装到当前用户目录。macOS 安装包是 `ffrm-darwin-arm64.dmg`，面向 Apple 芯片，打开后把 `ffrm.app` 拖进「应用程序」。绿色版仍然发布：Windows 是 `ffrm-win-x64.exe`，macOS 是 `ffrm-darwin-arm64`。发布里同时保留旧文件名 `ffrm.exe`，已经安装的 Windows 程序仍能从这里更新。程序内更新替换的是正在运行的程序文件，不下载安装包。
 
 已经安装 Rust 时，可以执行：
 
