@@ -1907,38 +1907,55 @@ fn char_index(text: &str, mut ix: usize) -> usize {
 
 pub fn run(initial: Vec<PathBuf>) {
     update::clear_retired();
+    let app = Application::new().with_assets(ChromeAssets);
+    // 程序坞图标被点开、当前没有窗口时，系统会回调这里。
+    app.on_reopen(|cx| {
+        if cx.windows().is_empty() {
+            open_main_window(cx, Vec::new());
+            cx.activate(true);
+        }
+    });
+    app.run(move |cx: &mut App| {
+        open_main_window(cx, initial);
+        // 红灯只关窗口。最后一个窗口关掉后退出，避免程序坞里留下空进程。
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+        cx.activate(true);
+    });
+}
+
+fn open_main_window(cx: &mut App, initial: Vec<PathBuf>) {
     let (config, config_error) = Config::load();
     let lang = config.lang;
-    Application::new()
-        .with_assets(ChromeAssets)
-        .run(move |cx: &mut App| {
-            let bounds = Bounds::centered(None, size(px(1120.), px(630.)), cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(platform::titlebar(window_title(lang))),
-                    window_min_size: Some(size(px(1120.), px(630.))),
-                    ..Default::default()
-                },
-                move |window, cx| {
-                    let pinned = config.pinned;
-                    window.on_next_frame(move |window, _cx| {
-                        platform::prepare_window(window, pinned);
-                    });
-                    cx.new(move |cx| {
-                        let mut desktop = Desktop::from_config(
-                            config,
-                            config_error,
-                            cx.focus_handle().tab_stop(true),
-                        );
-                        if !initial.is_empty() {
-                            desktop.add_paths(&initial, cx);
-                        }
-                        desktop
-                    })
-                },
-            )
-            .expect("无法打开窗口");
-            cx.activate(true);
-        });
+    let bounds = Bounds::centered(None, size(px(1120.), px(630.)), cx);
+    cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(platform::titlebar(window_title(lang))),
+            window_min_size: Some(size(px(1120.), px(630.))),
+            ..Default::default()
+        },
+        move |window, cx| {
+            let pinned = config.pinned;
+            window.on_next_frame(move |window, _cx| {
+                platform::prepare_window(window, pinned);
+            });
+            cx.new(move |cx| {
+                let mut desktop = Desktop::from_config(
+                    config,
+                    config_error,
+                    cx.focus_handle().tab_stop(true),
+                );
+                if !initial.is_empty() {
+                    desktop.add_paths(&initial, cx);
+                }
+                desktop
+            })
+        },
+    )
+    .expect("无法打开窗口");
 }
