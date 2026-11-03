@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    canvas, div, ease_in_out, fill, point, prelude::*, px, relative, rgb, size, svg, Animation,
-    AnimationExt, App, Application, AssetSource, Bounds, ClipboardItem, Context, ExternalPaths,
-    FocusHandle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ScrollHandle, SharedString, StyledText, TextLayout, Window,
-    WindowBounds, WindowControlArea, WindowOptions,
+    canvas, div, ease_in_out, fill, hsla, linear_color_stop, linear_gradient, point, prelude::*,
+    px, rgb, size, svg, Animation, AnimationExt, App, Application, AssetSource, Bounds,
+    ClipboardItem, Context, ExternalPaths, FocusHandle, FontWeight, HighlightStyle, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ScrollHandle, SharedString,
+    StyledText, TextLayout, Window, WindowBounds, WindowControlArea, WindowOptions,
 };
 
 use ffrm::Inspection;
@@ -1459,28 +1459,27 @@ fn progress_button(label: String, fraction: f32) -> gpui::AnyElement {
     let fraction = fraction.clamp(0., 1.);
     let mut button = div()
         .id("install-update")
-        .relative()
-        .overflow_hidden()
         .h(px(36.))
+        .px_4()
+        .flex()
+        .items_center()
         .rounded_full()
         .border_1()
         .border_color(rgb(LINE))
         .text_sm()
         .text_color(rgb(CREAM));
-    if fraction > 0. {
-        button = button.child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .w(relative(fraction))
-                .bg(rgb(PRESSED)),
-        );
+    // 子元素的背景只按矩形裁剪，圆角裁不住。进度画在按钮自己的背景上。
+    if fraction >= 1. {
+        button = button.bg(rgb(PRESSED));
+    } else if fraction > 0. {
+        let cut = fraction.clamp(0.001, 0.999);
+        button = button.bg(linear_gradient(
+            90.,
+            linear_color_stop(rgb(PRESSED), cut),
+            linear_color_stop(hsla(0., 0., 0., 0.), (cut + 0.001).min(1.)),
+        ));
     }
-    button
-        .child(div().px_4().h(px(36.)).flex().items_center().child(label))
-        .into_any_element()
+    button.child(label).into_any_element()
 }
 
 fn settings_page(desktop: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
