@@ -61,11 +61,20 @@ pub fn clear_retired() {
     let Ok(current) = std::env::current_exe() else {
         return;
     };
-    let Some((retired, incoming)) = stage_paths(&current) else {
-        return;
-    };
-    let _ = fs::remove_file(retired);
-    let _ = fs::remove_file(incoming);
+    if let Some((retired, incoming)) = stage_paths(&current) {
+        let _ = fs::remove_file(retired);
+        let _ = fs::remove_file(incoming);
+    }
+    // 旧版本把临时文件留在安装包里，签名会被破坏。这里清掉后再按需要重签。
+    if let Some(macos) = current.parent().filter(|_| app_bundle(&current).is_some()) {
+        let _ = fs::remove_file(macos.join("ffrm.old"));
+        let _ = fs::remove_file(macos.join("ffrm.new"));
+    }
+    if let Some(app) = app_bundle(&current) {
+        if !bundle_is_valid(&app) {
+            let _ = resign(&app);
+        }
+    }
 }
 
 fn compare(current: &str, tag: &str) -> Status {
@@ -204,25 +213,84 @@ fn is_macho(path: &Path) -> bool {
 }
 
 fn stage_paths(current: &Path) -> Option<(PathBuf, PathBuf)> {
-    let parent = current.parent()?;
     let name = current.file_name()?;
+    let dir = if app_bundle(current).is_some() {
+        cache_dir()?
+    } else {
+        current.parent()?.to_path_buf()
+    };
     let mut retired = name.to_os_string();
     retired.push(".old");
     let mut incoming = name.to_os_string();
     incoming.push(".new");
-    Some((parent.join(retired), parent.join(incoming)))
+    Some((dir.join(retired), dir.join(incoming)))
+}
+
+fn cache_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join("Library").join("Caches").join("ffrm"))
 }
 
 fn swap_in(current: &Path, incoming: &Path, retired: &Path) -> bool {
     let _ = fs::remove_file(retired);
-    if fs::rename(current, retired).is_err() {
+    if !move_file(current, retired) {
         return false;
     }
-    if fs::rename(incoming, current).is_err() {
-        let _ = fs::rename(retired, current);
+    if !move_file(incoming, current) || make_executable(current).is_err() {
+        let _ = move_file(retired, current);
         return false;
+    }
+    if let Some(app) = app_bundle(current) {
+        if resign(&app).is_err() {
+            let _ = move_file(current, incoming);
+            let _ = move_file(retired, current);
+            let _ = make_executable(current);
+            return false;
+        }
     }
     true
+}
+
+fn move_file(from: &Path, to: &Path) -> bool {
+    if let Some(parent) = to.parent() {
+        if !parent.as_os_str().is_empty() && fs::create_dir_all(parent).is_err() {
+            return false;
+        }
+    }
+    match fs::rename(from, to) {
+        Ok(()) => true,
+        // 缓存和安装包不在同一个卷时，改名会失败，改成复制。
+        Err(error) if error.raw_os_error() == Some(18) => {
+            if fs::copy(from, to).is_err() {
+                return false;
+            }
+            fs::remove_file(from).is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
+fn resign(app: &Path) -> Result<(), ()> {
+    let status = Command::new("/usr/bin/codesign")
+        .args(["--force", "--sign", "-", "--timestamp=none"])
+        .arg(app)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|_| ())?;
+    if status.success() { Ok(()) } else { Err(()) }
+}
+
+fn bundle_is_valid(app: &Path) -> bool {
+    Command::new("/usr/bin/codesign")
+        .args(["--verify", "--strict"])
+        .arg(app)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn relaunch(exe: &Path) -> Result<(), ()> {
@@ -315,6 +383,23 @@ mod tests {
             Status::Available("0.2.0".to_string())
         );
         assert_eq!(compare("0.1.0", "v0.1.0"), Status::Current);
+    }
+
+    #[test]
+    fn app_stages_outside_the_bundle() {
+        let exe = Path::new("/Applications/ffrm.app/Contents/MacOS/ffrm");
+        let (retired, incoming) = stage_paths(exe).unwrap();
+        assert!(retired.ends_with("Library/Caches/ffrm/ffrm.old"));
+        assert!(incoming.ends_with("Library/Caches/ffrm/ffrm.new"));
+        assert!(!retired.starts_with("/Applications/ffrm.app"));
+    }
+
+    #[test]
+    fn portable_stages_beside_the_executable() {
+        let exe = Path::new("/Users/me/Desktop/ffrm");
+        let (retired, incoming) = stage_paths(exe).unwrap();
+        assert_eq!(retired, Path::new("/Users/me/Desktop/ffrm.old"));
+        assert_eq!(incoming, Path::new("/Users/me/Desktop/ffrm.new"));
     }
 
     #[test]

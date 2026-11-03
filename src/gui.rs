@@ -1906,6 +1906,8 @@ fn char_index(text: &str, mut ix: usize) -> usize {
 }
 
 pub fn run(initial: Vec<PathBuf>) {
+    // 先把安装包里的旧配置搬出去，再清理临时文件并补签名。
+    let _ = config::Config::load();
     update::clear_retired();
     let app = Application::new().with_assets(ChromeAssets);
     // 程序坞图标被点开、当前没有窗口时，系统会回调这里。

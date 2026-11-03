@@ -36,13 +36,88 @@ impl Default for Config {
 pub fn config_path() -> PathBuf {
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("ffrm.cfg")))
+        .map(|exe| config_path_for(&exe))
         .unwrap_or_else(|| PathBuf::from("ffrm.cfg"))
+}
+
+fn config_path_for(exe: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if let Some(path) = macos_app_config(exe) {
+        return path;
+    }
+    exe.parent()
+        .map(|dir| dir.join("ffrm.cfg"))
+        .unwrap_or_else(|| PathBuf::from("ffrm.cfg"))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_config(exe: &Path) -> Option<PathBuf> {
+    if !is_app_executable(exe) {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("ffrm")
+            .join("ffrm.cfg"),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn is_app_executable(exe: &Path) -> bool {
+    let Some(macos) = exe.parent() else {
+        return false;
+    };
+    if macos.file_name().is_none_or(|name| name != "MacOS") {
+        return false;
+    }
+    let Some(contents) = macos.parent() else {
+        return false;
+    };
+    if contents.file_name().is_none_or(|name| name != "Contents") {
+        return false;
+    }
+    contents
+        .parent()
+        .and_then(|app| app.extension())
+        .is_some_and(|ext| ext == "app")
+}
+
+#[cfg(target_os = "macos")]
+fn adopt_legacy_config(dest: &Path) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    if !is_app_executable(&exe) {
+        return;
+    }
+    let Some(legacy) = exe.parent().map(|dir| dir.join("ffrm.cfg")) else {
+        return;
+    };
+    if legacy == dest || !legacy.is_file() {
+        return;
+    }
+    if dest.is_file() {
+        let _ = fs::remove_file(&legacy);
+        return;
+    }
+    if let Some(parent) = dest.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    if fs::rename(&legacy, dest).is_err() && fs::copy(&legacy, dest).is_ok() {
+        let _ = fs::remove_file(&legacy);
+    }
 }
 
 impl Config {
     pub fn load() -> (Self, Option<String>) {
         let path = config_path();
+        #[cfg(target_os = "macos")]
+        adopt_legacy_config(&path);
         match Self::load_from(&path) {
             Ok(config) => (config, None),
             Err(ReadError::Missing) => {
@@ -72,12 +147,17 @@ impl Config {
     }
 
     fn save_to(&self, path: &Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|error| self.write_error(path, &error))?;
+            }
+        }
         fs::write(path, self.encode()).map_err(|error| self.write_error(path, &error))
     }
 
     fn encode(&self) -> String {
         format!(
-            "\u{feff}# ffrm {version}\n# 和 ffrm.exe 放在同一目录。\n# lang 为 zh 或 en。unlock、force、pinned 为 true 或 false。\nlang={lang}\nunlock={unlock}\nforce={force}\npinned={pinned}\n",
+            "\u{feff}# ffrm {version}\n# lang 为 zh 或 en。unlock、force、pinned 为 true 或 false。\nlang={lang}\nunlock={unlock}\nforce={force}\npinned={pinned}\n",
             version = env!("CARGO_PKG_VERSION"),
             lang = match self.lang {
                 Lang::Zh => "zh",
@@ -153,6 +233,24 @@ mod tests {
     fn defaults_and_unknown_values() {
         let config = Config::decode("# comment\nlang=nope\nunlock=maybe\nextra=1\n");
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn portable_config_stays_beside_the_executable() {
+        let exe = Path::new("/Users/me/Desktop/ffrm");
+        assert_eq!(
+            config_path_for(exe),
+            Path::new("/Users/me/Desktop/ffrm.cfg")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_config_lives_outside_the_bundle() {
+        let exe = Path::new("/Applications/ffrm.app/Contents/MacOS/ffrm");
+        let path = config_path_for(exe);
+        assert!(path.ends_with("Library/Application Support/ffrm/ffrm.cfg"));
+        assert!(!path.starts_with("/Applications/ffrm.app"));
     }
 
     #[test]
