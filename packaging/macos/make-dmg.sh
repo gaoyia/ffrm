@@ -5,7 +5,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 bin="${1:-"$root/target/release/ffrm"}"
-version="${2:-0.1.6}"
+version="${2:-0.1.7}"
 out="${3:-"$root/target/release/ffrm.dmg"}"
 
 if [[ ! -f "$bin" ]]; then

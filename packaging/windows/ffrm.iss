@@ -1,7 +1,7 @@
 ; 当前用户安装包。配置文件写在程序旁边，所以不装进需要管理员权限的目录。
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.6"
+  #define MyAppVersion "0.1.7"
 #endif
 
 #define MyAppName "ffrm"
