@@ -1,7 +1,12 @@
 use std::fs;
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+extern "C" {
+    fn setsid() -> i32;
+}
 
 const RELEASES_LATEST: &str = "https://github.com/gaoyia/ffrm/releases/latest";
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
@@ -165,7 +170,16 @@ fn download(url: &str, dest: &Path) -> Result<(), FetchError> {
     if meta.len() < 64 || meta.len() > FILE_LIMIT || !is_macho(dest) {
         return Err(FetchError::Network);
     }
-    Ok(())
+    // curl 保存的文件没有执行权限，替换后无法重新启动。
+    make_executable(dest)
+}
+
+fn make_executable(path: &Path) -> Result<(), FetchError> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = fs::metadata(path).map_err(|_| FetchError::Network)?;
+    let mut permissions = meta.permissions();
+    permissions.set_mode(permissions.mode() | 0o755);
+    fs::set_permissions(path, permissions).map_err(|_| FetchError::Network)
 }
 
 fn is_macho(path: &Path) -> bool {
@@ -212,11 +226,59 @@ fn swap_in(current: &Path, incoming: &Path, retired: &Path) -> bool {
 }
 
 fn relaunch(exe: &Path) -> Result<(), ()> {
+    if let Some(app) = app_bundle(exe) {
+        // 安装包交给启动服务新开实例。open 打开的是 .app，不会带出终端。
+        return Command::new("/usr/bin/open")
+            .arg("-n")
+            .arg(&app)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| ());
+    }
+    // 绿色版是裸可执行文件。open 会交给终端去跑，所以这里直接新开会话启动。
+    spawn_detached(exe)
+}
+
+fn spawn_detached(exe: &Path) -> Result<(), ()> {
     let mut command = Command::new(exe);
     if let Some(dir) = exe.parent() {
         command.current_dir(dir);
     }
-    command.spawn().map(|_| ()).map_err(|_| ())
+    unsafe {
+        command.pre_exec(|| {
+            // 脱离旧进程组。旧窗口退出时不会把新进程一起结束。
+            if setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| ())
+}
+
+fn app_bundle(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    if macos.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents = macos.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    let app = contents.parent()?;
+    if app.extension()? != "app" {
+        return None;
+    }
+    Some(app.to_path_buf())
 }
 
 fn display_version(tag: &str) -> String {
@@ -253,6 +315,28 @@ mod tests {
             Status::Available("0.2.0".to_string())
         );
         assert_eq!(compare("0.1.0", "v0.1.0"), Status::Current);
+    }
+
+    #[test]
+    fn app_bundle_is_reopened_as_a_bundle() {
+        let exe = Path::new("/Applications/ffrm.app/Contents/MacOS/ffrm");
+        assert_eq!(
+            app_bundle(exe).as_deref(),
+            Some(Path::new("/Applications/ffrm.app"))
+        );
+        assert!(app_bundle(Path::new("/Users/me/Desktop/ffrm")).is_none());
+    }
+
+    #[test]
+    fn downloaded_file_becomes_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("ffrm-exec-{}", std::process::id()));
+        fs::write(&path, b"not a real binary").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        make_executable(&path).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        let _ = fs::remove_file(&path);
+        assert_eq!(mode & 0o111, 0o111);
     }
 
     #[test]
