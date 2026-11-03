@@ -1,24 +1,12 @@
-use std::ffi::c_void;
 use std::fs;
-use std::io::Write;
+use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use windows_sys::Win32::Networking::WinHttp::{
-    WinHttpAddRequestHeaders, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest,
-    WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
-    WinHttpSetOption, WinHttpSetTimeouts, INTERNET_DEFAULT_HTTPS_PORT,
-    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
-    WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2, WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3,
-    WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
-    WINHTTP_OPTION_SECURE_PROTOCOLS, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_FLAG_NUMBER,
-    WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE,
-};
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
-const RELEASES_LATEST: &str = "/gaoyia/ffrm/releases/latest";
-const EXE_LIMIT: usize = 64 * 1024 * 1024;
+use super::fetch::{self, FetchError};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Status {
@@ -32,24 +20,6 @@ pub enum Status {
 pub enum InstallStep {
     Download(Option<u8>),
     Replace,
-}
-
-#[derive(Debug)]
-enum FetchError {
-    Missing,
-    Network,
-}
-
-struct Session(*mut c_void);
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                WinHttpCloseHandle(self.0);
-            }
-        }
-    }
 }
 
 pub fn check(current: &str) -> Status {
@@ -103,7 +73,7 @@ fn compare(current: &str, tag: &str) -> Status {
 }
 
 fn fetch_tag() -> Result<String, FetchError> {
-    release_tag(&latest_location()?)
+    release_tag(&fetch::latest_location()?)
 }
 
 fn release_exe(tag: &str) -> String {
@@ -127,311 +97,22 @@ fn release_tag(location: &str) -> Result<String, FetchError> {
     }
 }
 
-fn latest_location() -> Result<String, FetchError> {
-    let exchange = open_request("github.com", RELEASES_LATEST, "*/*", false)?;
-    unsafe {
-        if WinHttpSendRequest(
-            exchange.request.0,
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            0,
-            0,
-            0,
-        ) == 0
-        {
-            return Err(FetchError::Network);
-        }
-        if WinHttpReceiveResponse(exchange.request.0, std::ptr::null_mut()) == 0 {
-            return Err(FetchError::Network);
-        }
-        let status = status_code(exchange.request.0)?;
-        if status == 404 {
-            return Err(FetchError::Missing);
-        }
-        if !(300..400).contains(&status) {
-            return Err(FetchError::Network);
-        }
-        query_header(exchange.request.0, WINHTTP_QUERY_LOCATION)
-    }
-}
-
 fn download(url: &str, dest: &Path, report: &mut dyn FnMut(InstallStep)) -> Result<(), FetchError> {
-    let (host, path) = split_https(url).ok_or(FetchError::Network)?;
-    let bytes = http_get(
-        &host,
-        &path,
-        "application/octet-stream",
-        EXE_LIMIT,
-        |percent| {
-            report(InstallStep::Download(percent));
-        },
-    )?;
-    if bytes.len() < 64 || bytes.first_chunk::<2>() != Some(b"MZ") {
+    fetch::download(url, dest, &mut |percent| {
+        report(InstallStep::Download(percent));
+    })?;
+    if !is_exe(dest) {
         return Err(FetchError::Network);
     }
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|_| FetchError::Network)?;
-    }
-    let mut file = fs::File::create(dest).map_err(|_| FetchError::Network)?;
-    file.write_all(&bytes).map_err(|_| FetchError::Network)?;
     Ok(())
 }
 
-struct Exchange {
-    _session: Session,
-    _connection: Session,
-    request: Session,
-}
-
-fn open_request(
-    host: &str,
-    path: &str,
-    accept: &str,
-    follow: bool,
-) -> Result<Exchange, FetchError> {
-    unsafe {
-        let agent = wide("ffrm");
-        let session = WinHttpOpen(
-            agent.as_ptr(),
-            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-        );
-        if session.is_null() {
-            return Err(FetchError::Network);
-        }
-        let session = Session(session);
-        if WinHttpSetTimeouts(session.0, 8000, 8000, 30000, 120000) == 0 {
-            return Err(FetchError::Network);
-        }
-        let protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-        if WinHttpSetOption(
-            session.0 as *const c_void,
-            WINHTTP_OPTION_SECURE_PROTOCOLS,
-            &protocols as *const u32 as *const c_void,
-            std::mem::size_of_val(&protocols) as u32,
-        ) == 0
-        {
-            return Err(FetchError::Network);
-        }
-
-        let host = wide(host);
-        let connection = WinHttpConnect(session.0, host.as_ptr(), INTERNET_DEFAULT_HTTPS_PORT, 0);
-        if connection.is_null() {
-            return Err(FetchError::Network);
-        }
-        let connection = Session(connection);
-        let method = wide("GET");
-        let path = wide(path);
-        let request = WinHttpOpenRequest(
-            connection.0,
-            method.as_ptr(),
-            path.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            WINHTTP_FLAG_SECURE,
-        );
-        if request.is_null() {
-            return Err(FetchError::Network);
-        }
-        let request = Session(request);
-        if !follow {
-            let never = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
-            if WinHttpSetOption(
-                request.0 as *const c_void,
-                WINHTTP_OPTION_REDIRECT_POLICY,
-                &never as *const u32 as *const c_void,
-                std::mem::size_of_val(&never) as u32,
-            ) == 0
-            {
-                return Err(FetchError::Network);
-            }
-        }
-        let headers = wide(&format!("User-Agent: ffrm\r\nAccept: {accept}\r\n"));
-        if WinHttpAddRequestHeaders(
-            request.0,
-            headers.as_ptr(),
-            u32::MAX,
-            WINHTTP_ADDREQ_FLAG_ADD,
-        ) == 0
-        {
-            return Err(FetchError::Network);
-        }
-        Ok(Exchange {
-            _session: session,
-            _connection: connection,
-            request,
-        })
-    }
-}
-
-fn http_get(
-    host: &str,
-    path: &str,
-    accept: &str,
-    max: usize,
-    on_progress: impl FnMut(Option<u8>),
-) -> Result<Vec<u8>, FetchError> {
-    let exchange = open_request(host, path, accept, true)?;
-    unsafe {
-        if WinHttpSendRequest(
-            exchange.request.0,
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            0,
-            0,
-            0,
-        ) == 0
-        {
-            return Err(FetchError::Network);
-        }
-        if WinHttpReceiveResponse(exchange.request.0, std::ptr::null_mut()) == 0 {
-            return Err(FetchError::Network);
-        }
-        let status = status_code(exchange.request.0)?;
-        if status != 200 {
-            return Err(FetchError::Network);
-        }
-        read_body(exchange.request.0, max, on_progress)
-    }
-}
-
-fn query_header(request: *mut c_void, level: u32) -> Result<String, FetchError> {
-    let mut bytes = 0u32;
-    unsafe {
-        WinHttpQueryHeaders(
-            request,
-            level,
-            std::ptr::null(),
-            std::ptr::null_mut(),
-            &mut bytes,
-            std::ptr::null_mut(),
-        );
-    }
-    if bytes < 2 {
-        return Err(FetchError::Network);
-    }
-    let mut units = vec![0u16; bytes as usize / 2];
-    let ok = unsafe {
-        WinHttpQueryHeaders(
-            request,
-            level,
-            std::ptr::null(),
-            units.as_mut_ptr() as *mut c_void,
-            &mut bytes,
-            std::ptr::null_mut(),
-        )
+fn is_exe(path: &Path) -> bool {
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
     };
-    if ok == 0 {
-        return Err(FetchError::Network);
-    }
-    let end = units
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(units.len());
-    Ok(String::from_utf16_lossy(&units[..end]))
-}
-
-fn status_code(request: *mut c_void) -> Result<u32, FetchError> {
-    let mut status = 0u32;
-    let mut length = std::mem::size_of::<u32>() as u32;
-    let ok = unsafe {
-        WinHttpQueryHeaders(
-            request,
-            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-            std::ptr::null(),
-            &mut status as *mut u32 as *mut c_void,
-            &mut length,
-            std::ptr::null_mut(),
-        )
-    };
-    if ok == 0 {
-        Err(FetchError::Network)
-    } else {
-        Ok(status)
-    }
-}
-
-fn content_length(request: *mut c_void) -> Option<u64> {
-    let mut length = 0u32;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    let ok = unsafe {
-        WinHttpQueryHeaders(
-            request,
-            WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
-            std::ptr::null(),
-            &mut length as *mut u32 as *mut c_void,
-            &mut size,
-            std::ptr::null_mut(),
-        )
-    };
-    if ok != 0 && length > 0 {
-        return Some(u64::from(length));
-    }
-    let text = query_header(request, WINHTTP_QUERY_CONTENT_LENGTH).ok()?;
-    let parsed = text.trim().parse::<u64>().ok()?;
-    if parsed == 0 {
-        None
-    } else {
-        Some(parsed)
-    }
-}
-
-fn download_percent(received: usize, total: u64) -> u8 {
-    if total == 0 {
-        return 0;
-    }
-    ((received as u64).saturating_mul(100) / total).min(100) as u8
-}
-
-fn read_body(
-    request: *mut c_void,
-    max: usize,
-    mut on_progress: impl FnMut(Option<u8>),
-) -> Result<Vec<u8>, FetchError> {
-    let total = content_length(request);
-    let mut body = Vec::new();
-    let mut reported: Option<Option<u8>> = None;
-    let mut report = |percent: Option<u8>| {
-        if reported != Some(percent) {
-            reported = Some(percent);
-            on_progress(percent);
-        }
-    };
-    report(total.map(|_| 0));
-    loop {
-        let mut buffer = [0u8; 8192];
-        let mut read = 0u32;
-        let ok = unsafe {
-            WinHttpReadData(
-                request,
-                buffer.as_mut_ptr() as *mut c_void,
-                buffer.len() as u32,
-                &mut read,
-            )
-        };
-        if ok == 0 {
-            return Err(FetchError::Network);
-        }
-        if read == 0 {
-            break;
-        }
-        body.extend_from_slice(&buffer[..read as usize]);
-        if body.len() > max {
-            return Err(FetchError::Network);
-        }
-        if let Some(total) = total {
-            report(Some(download_percent(body.len(), total)));
-        }
-    }
-    if total.is_some() {
-        report(Some(100));
-    }
-    Ok(body)
+    let mut magic = [0u8; 2];
+    file.read_exact(&mut magic).is_ok() && magic == *b"MZ"
 }
 
 fn stage_paths(current: &Path) -> Option<(PathBuf, PathBuf)> {
@@ -468,16 +149,6 @@ fn relaunch(exe: &Path) -> Result<(), ()> {
         .map_err(|_| ())
 }
 
-fn split_https(url: &str) -> Option<(String, String)> {
-    let rest = url.strip_prefix("https://")?;
-    let slash = rest.find('/')?;
-    let host = &rest[..slash];
-    if host.is_empty() {
-        return None;
-    }
-    Some((host.to_string(), rest[slash..].to_string()))
-}
-
 fn display_version(tag: &str) -> String {
     tag.trim().trim_start_matches(['v', 'V']).to_string()
 }
@@ -501,10 +172,6 @@ fn version_numbers(text: &str) -> Option<[u64; 3]> {
     }
 }
 
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,15 +180,6 @@ mod tests {
     fn same_version_is_current() {
         assert_eq!(compare("0.1.0", "v0.1.0"), Status::Current);
         assert_eq!(compare("0.2.0", "v0.1.0"), Status::Current);
-    }
-
-    #[test]
-    fn download_percent_follows_the_received_share() {
-        assert_eq!(download_percent(0, 200), 0);
-        assert_eq!(download_percent(50, 200), 25);
-        assert_eq!(download_percent(200, 200), 100);
-        assert_eq!(download_percent(250, 200), 100);
-        assert_eq!(download_percent(1, 0), 0);
     }
 
     #[test]

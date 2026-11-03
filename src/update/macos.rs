@@ -4,12 +4,11 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::fetch::{self, FetchError};
+
 extern "C" {
     fn setsid() -> i32;
 }
-
-const RELEASES_LATEST: &str = "https://github.com/gaoyia/ffrm/releases/latest";
-const FILE_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Status {
@@ -25,12 +24,6 @@ pub enum InstallStep {
     Replace,
 }
 
-#[derive(Debug)]
-enum FetchError {
-    Missing,
-    Network,
-}
-
 pub fn check(current: &str) -> Status {
     match fetch_tag() {
         Ok(tag) => compare(current, &tag),
@@ -44,8 +37,7 @@ pub fn install(mut report: impl FnMut(InstallStep) + Send) -> Result<(), ()> {
     let (retired, incoming) = stage_paths(&current).ok_or(())?;
     let tag = fetch_tag().map_err(|_| ())?;
     let url = release_binary(&tag);
-    report(InstallStep::Download(None));
-    if download(&url, &incoming).is_err() {
+    if download(&url, &incoming, &mut report).is_err() {
         let _ = fs::remove_file(&incoming);
         return Err(());
     }
@@ -92,7 +84,7 @@ fn compare(current: &str, tag: &str) -> Status {
 }
 
 fn fetch_tag() -> Result<String, FetchError> {
-    release_tag(&latest_location()?)
+    release_tag(&fetch::latest_location()?)
 }
 
 fn release_binary(tag: &str) -> String {
@@ -116,70 +108,14 @@ fn release_tag(location: &str) -> Result<String, FetchError> {
     }
 }
 
-fn latest_location() -> Result<String, FetchError> {
-    let output = Command::new("/usr/bin/curl")
-        .args([
-            "--silent",
-            "--show-error",
-            "--max-redirs",
-            "0",
-            "--dump-header",
-            "-",
-            "--output",
-            "/dev/null",
-            "--max-time",
-            "20",
-            RELEASES_LATEST,
-        ])
-        .output()
-        .map_err(|_| FetchError::Network)?;
-    let headers = String::from_utf8_lossy(&output.stdout);
-    let status = headers.lines().next().unwrap_or("");
-    if status.contains(" 404 ") {
-        return Err(FetchError::Missing);
-    }
-    headers
-        .lines()
-        .find_map(|line| {
-            let rest = line
-                .strip_prefix("Location:")
-                .or_else(|| line.strip_prefix("location:"))?;
-            let location = rest.trim();
-            if location.is_empty() {
-                None
-            } else {
-                Some(location.to_string())
-            }
-        })
-        .ok_or(FetchError::Network)
-}
-
-fn download(url: &str, dest: &Path) -> Result<(), FetchError> {
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|_| FetchError::Network)?;
-    }
-    let status = Command::new("/usr/bin/curl")
-        .args([
-            "--silent",
-            "--show-error",
-            "--location",
-            "--fail",
-            "--max-time",
-            "120",
-            "--output",
-        ])
-        .arg(dest)
-        .arg(url)
-        .status()
-        .map_err(|_| FetchError::Network)?;
-    if !status.success() {
+fn download(url: &str, dest: &Path, report: &mut dyn FnMut(InstallStep)) -> Result<(), FetchError> {
+    fetch::download(url, dest, &mut |percent| {
+        report(InstallStep::Download(percent));
+    })?;
+    if !is_macho(dest) {
         return Err(FetchError::Network);
     }
-    let meta = fs::metadata(dest).map_err(|_| FetchError::Network)?;
-    if meta.len() < 64 || meta.len() > FILE_LIMIT || !is_macho(dest) {
-        return Err(FetchError::Network);
-    }
-    // curl 保存的文件没有执行权限，替换后无法重新启动。
+    // 下载得到的文件没有执行权限，替换后无法重新启动。
     make_executable(dest)
 }
 
@@ -228,7 +164,12 @@ fn stage_paths(current: &Path) -> Option<(PathBuf, PathBuf)> {
 
 fn cache_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join("Library").join("Caches").join("ffrm"))
+    Some(
+        PathBuf::from(home)
+            .join("Library")
+            .join("Caches")
+            .join("ffrm"),
+    )
 }
 
 fn swap_in(current: &Path, incoming: &Path, retired: &Path) -> bool {
@@ -279,7 +220,11 @@ fn resign(app: &Path) -> Result<(), ()> {
         .stderr(Stdio::null())
         .status()
         .map_err(|_| ())?;
-    if status.success() { Ok(()) } else { Err(()) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(())
+    }
 }
 
 fn bundle_is_valid(app: &Path) -> bool {
