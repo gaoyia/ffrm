@@ -268,10 +268,34 @@ fn document_wflow(exe: &Path) -> String {
 }
 
 fn command_script(exe: &Path) -> String {
-    format!(
-        "exec {} \"$@\"\n",
-        shell_single_quote(&exe.display().to_string())
-    )
+    if let Some(app) = app_bundle(exe) {
+        // 直接执行包内程序会挂在终端上：程序坞显示终端图标，关窗口后进程也不退出。
+        format!(
+            "exec /usr/bin/open -n {} --args \"$@\"\n",
+            shell_single_quote(&app.display().to_string())
+        )
+    } else {
+        format!(
+            "exec {} \"$@\"\n",
+            shell_single_quote(&exe.display().to_string())
+        )
+    }
+}
+
+fn app_bundle(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    if macos.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents = macos.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    let app = contents.parent()?;
+    if app.extension()? != "app" {
+        return None;
+    }
+    Some(app.to_path_buf())
 }
 
 fn shell_single_quote(text: &str) -> String {
@@ -354,6 +378,21 @@ fn io_fail(lang: Lang, err: &std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_service_opens_the_bundle() {
+        let script = command_script(Path::new("/Applications/ffrm.app/Contents/MacOS/ffrm"));
+        assert_eq!(
+            script,
+            "exec /usr/bin/open -n '/Applications/ffrm.app' --args \"$@\"\n"
+        );
+    }
+
+    #[test]
+    fn portable_service_execs_the_binary() {
+        let script = command_script(Path::new("/Users/me/Desktop/ffrm"));
+        assert_eq!(script, "exec '/Users/me/Desktop/ffrm' \"$@\"\n");
+    }
 
     #[test]
     fn quotes_paths_and_escapes_plist_text() {
