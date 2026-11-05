@@ -163,3 +163,7 @@ ffrm delete D:\notes\a.docx --unlock --yes
 ## 许可
 
 本项目使用 MIT 许可，文本在 `LICENSE`。Release 构建会把同一份文件复制到 `target\release\LICENSE`。
+
+## Star 趋势
+
+[![Star 趋势](https://api.star-history.com/svg?repos=gaoyia/ffrm&type=Date)](https://star-history.com/#gaoyia/ffrm&Date)
